@@ -94,14 +94,14 @@ export function FileUploader() {
   };
 
   return (
-    <Card 
-      className={`relative group cursor-pointer border-2 border-dashed transition-all duration-300 p-12 text-center rounded-3xl
-        ${isDragging ? 'border-black bg-slate-100 scale-[1.02]' : 'border-slate-200 hover:border-slate-400'}
+    <div 
+      className={`relative group cursor-pointer border-2 border-dashed transition-all duration-300 p-16 text-center rounded-[32px]
+        ${isDragging ? 'border-indigo-600 bg-indigo-50/50 scale-[0.99] shadow-inner' : 'border-gray-200 hover:border-indigo-200 bg-white hover:bg-gray-50/50 shadow-sm'}
       `}
       onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
       onDragLeave={() => setIsDragging(false)}
       onDrop={onDrop}
-      onClick={() => document.getElementById('file-upload')?.click()}
+      onClick={() => window.document.getElementById('file-upload')?.click()}
     >
       <input 
         id="file-upload"
@@ -111,42 +111,48 @@ export function FileUploader() {
         onChange={onFileChange}
       />
       
-      <div className="flex flex-col items-center gap-4">
-        <div className="w-16 h-16 bg-black rounded-2xl flex items-center justify-center text-white shadow-xl group-hover:scale-110 transition-transform duration-300">
+      <div className="flex flex-col items-center gap-6">
+        <div className="w-20 h-20 bg-indigo-600 rounded-3xl flex items-center justify-center text-white shadow-2xl shadow-indigo-200 group-hover:scale-105 transition-transform duration-500">
           <Upload className="w-8 h-8" />
         </div>
         
-        <div>
-          <h3 className="text-xl font-bold tracking-tight uppercase">Upload Practicum Template</h3>
-          <p className="text-slate-500 text-sm mt-1">Drag and drop or click to browse</p>
+        <div className="space-y-1">
+          <h3 className="text-xl font-semibold tracking-tight text-gray-900">Upload Practicum</h3>
+          <p className="text-gray-400 text-sm font-medium">Drag and drop your template files here</p>
         </div>
 
-        <div className="flex gap-4 mt-2">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 rounded-full border border-slate-200">
-            <FileType className="w-4 h-4 text-blue-500" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-600">DOCX</span>
+        <div className="flex gap-3">
+          <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-2xl border border-gray-100 shadow-sm">
+            <FileType className="w-4 h-4 text-indigo-500" />
+            <span className="text-[11px] font-bold uppercase tracking-widest text-gray-400">DOCX</span>
           </div>
-          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 rounded-full border border-slate-200 opacity-50 grayscale">
-            <FileType className="w-4 h-4 text-red-500" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-600">PDF (Text Only)</span>
+          <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-2xl border border-gray-100 shadow-sm opacity-60">
+            <FileType className="w-4 h-4 text-rose-500" />
+            <span className="text-[11px] font-bold uppercase tracking-widest text-gray-400">PDF</span>
           </div>
         </div>
 
-        <div className="mt-6 flex items-center justify-center gap-6 border-t border-slate-100 pt-6 w-full max-w-md">
-          <div className="flex items-center gap-1.5 text-slate-400">
-            <CheckCircle2 className="w-4 h-4" />
-            <span className="text-[10px] font-bold uppercase tracking-tighter">Auto Detection</span>
+        <div className="mt-4 flex items-center justify-center gap-8 border-t border-gray-50 pt-8 w-full max-w-sm">
+          <div className="flex flex-col items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+            </div>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-300">Semantic</span>
           </div>
-          <div className="flex items-center gap-1.5 text-slate-400">
-            <CheckCircle2 className="w-4 h-4" />
-            <span className="text-[10px] font-bold uppercase tracking-tighter">Live Preview</span>
+          <div className="flex flex-col items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center">
+              <CheckCircle2 className="w-4 h-4 text-indigo-500" />
+            </div>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-300">High Fidelity</span>
           </div>
-          <div className="flex items-center gap-1.5 text-slate-400">
-            <CheckCircle2 className="w-4 h-4" />
-            <span className="text-[10px] font-bold uppercase tracking-tighter">Local Export</span>
+          <div className="flex flex-col items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-amber-50 flex items-center justify-center">
+              <CheckCircle2 className="w-4 h-4 text-amber-500" />
+            </div>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-300">Private</span>
           </div>
         </div>
       </div>
-    </Card>
+    </div>
   );
 }

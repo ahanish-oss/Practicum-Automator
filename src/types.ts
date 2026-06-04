@@ -3,15 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type FieldType = 'text' | 'textarea' | 'table' | 'list';
+export type FieldType = 'text' | 'textarea' | 'table' | 'list' | 'procedure-steps' | 'kv-pair';
 
 export interface FieldMapping {
-  type: 'paragraph' | 'table-cell';
+  type: 'paragraph' | 'table-cell' | 'composite';
   paragraphIndex?: number;
+  startParagraph?: number;
+  endParagraph?: number;
   tableIndex?: number;
   rowIndex?: number;
   cellIndex?: number;
-  fieldIndexInText?: number; // For multiple placeholders in one paragraph
+  fieldIndexInText?: number; 
+  subMappings?: Record<string, FieldMapping>; // For composite types like "Resources"
 }
 
 export interface Field {
@@ -26,6 +29,7 @@ export interface Field {
   isDynamic?: boolean; // Can user add more rows?
   originalPattern?: string; // The pattern detected in the DOCX (e.g. ".....")
   mapping?: FieldMapping;
+  semanticRole?: 'resource' | 'procedure' | 'observation' | 'result' | 'interpretation' | 'conclusion';
 }
 
 export interface Section {
@@ -33,6 +37,7 @@ export interface Section {
   title: string;
   content: string;
   fields: Field[];
+  intent?: 'student-fillable' | 'faculty-evaluation' | 'template-static' | 'assessment';
 }
 
 export interface DocumentData {

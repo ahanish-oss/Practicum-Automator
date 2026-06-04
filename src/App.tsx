@@ -8,13 +8,11 @@ import { useStore } from './store/useStore';
 import { FileUploader } from './components/FileUploader';
 import { DynamicForm } from './components/DynamicForm';
 import { DocPreview } from './components/DocPreview';
-import { DocumentInspector } from './components/DocumentInspector';
 import { DraftsPanel } from './components/DraftsPanel';
+import { AnalysisProgress } from './components/AnalysisProgress';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
-import { Separator } from '@/components/ui/separator';
-import { FileText, Download, RotateCcw, CheckCircle2, Layout, SlidersHorizontal, Database, X, History } from 'lucide-react';
+import { FileText, Download, RotateCcw, CheckCircle2, History } from 'lucide-react';
 import { exportDocx } from './lib/exporter';
 import { db } from './lib/db';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -22,14 +20,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 export default function App() {
   const { 
     document: appDocument, 
-    isLoading, 
     analysisProgress, 
-    isDarkMode, 
     resetAll,
     formValues 
   } = useStore();
 
-  const [showInspector, setShowInspector] = useState(false);
   const [showDrafts, setShowDrafts] = useState(false);
 
   const handleSaveDraft = async () => {
@@ -38,215 +33,165 @@ export default function App() {
     setShowDrafts(true);
   };
 
-  useEffect(() => {
-    if (isDarkMode) {
-      window.document.documentElement.classList.add('dark');
-    } else {
-      window.document.documentElement.classList.remove('dark');
-    }
-  }, [isDarkMode]);
-
-  const handleDownload = async () => {
-    if (!appDocument) return;
-    await exportDocx(appDocument, formValues);
-  };
-
-  const completionRate = appDocument && appDocument.stats.fieldCount > 0 ? Math.floor(
-    (Object.keys(formValues).filter(k => formValues[k]).length / appDocument.stats.fieldCount) * 100
-  ) : 0;
-
   return (
-    <div className={`min-h-screen bg-slate-50 dark:bg-zinc-950 transition-colors duration-300 font-sans text-slate-900 dark:text-zinc-100`}>
-      {/* Enterprise Header */}
-      <header className="sticky top-0 z-50 w-full border-b border-slate-100 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md px-8 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-8">
-          <div className="flex items-center gap-2">
-            <div className="bg-black dark:bg-white p-1.5 rounded-lg">
-              <FileText className="w-5 h-5 text-white dark:text-black" />
+    <div className="min-h-screen flex flex-col bg-[#fafafb]">
+      {/* Header */}
+      <header className="sticky top-0 z-50 w-full bg-white/80 backdrop-blur-md border-b border-gray-100 py-4 px-8">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-100/50">
+                <FileText className="w-5 h-5 text-white" />
+              </div>
+              <div className="flex flex-col">
+                <h1 className="text-[13px] font-semibold text-gray-900 tracking-tight">Practicum Intelligence</h1>
+                <span className="text-[11px] text-gray-400 font-medium">Document Automation</span>
+              </div>
             </div>
-            <span className="font-black text-lg tracking-tighter uppercase">Practicum.</span>
+            
+            {appDocument && (
+              <div className="flex items-center gap-3 pl-6 border-l border-gray-100">
+                <span className="text-xs font-medium text-gray-500 line-clamp-1 max-w-[200px]">
+                  {appDocument.name}
+                </span>
+                <Badge variant="secondary" className="bg-indigo-50 text-indigo-600 border-none px-2 py-0.5 text-[10px] font-semibold">
+                  Processed
+                </Badge>
+              </div>
+            )}
           </div>
-          
-          <nav className="flex items-center gap-1">
-            {['Overview', 'Problems (11)', 'Quizzes (0)', 'Document', 'My Team'].map((tab) => (
-              <button 
-                key={tab}
-                className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest transition-all rounded-lg ${
-                  tab === 'Document' 
-                  ? 'bg-slate-100 text-black dark:bg-zinc-800 dark:text-white' 
-                  : 'text-slate-400 hover:text-black dark:hover:text-white'
-                }`}
-              >
-                {tab}
-              </button>
-            ))}
-          </nav>
-        </div>
 
-        <div className="flex items-center gap-3">
-          {appDocument && (
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              onClick={() => setShowInspector(!showInspector)}
-              className={`gap-2 text-[9px] font-black uppercase tracking-widest ${showInspector ? 'text-blue-500 bg-blue-50/50' : 'text-slate-400'}`}
-            >
-              <Database className="w-3.5 h-3.5" />
-              Inspector
-            </Button>
-          )}
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            onClick={() => setShowDrafts(!showDrafts)}
-            className={`gap-2 text-[9px] font-black uppercase tracking-widest ${showDrafts ? 'text-blue-500 bg-blue-50/50' : 'text-slate-400'}`}
-          >
-            <History className="w-3.5 h-3.5" />
-            Drafts
-          </Button>
-          <button 
-            onClick={handleSaveDraft}
-            className="text-[10px] font-bold uppercase tracking-widest px-4 py-2 text-slate-500 hover:text-black transition-colors"
-          >
-            Save Draft
-          </button>
-          <Badge className="bg-slate-800 text-white dark:bg-zinc-100 dark:text-black rounded-lg px-3 py-1 text-[10px] font-bold">Submitted</Badge>
-          <Separator orientation="vertical" className="h-6 mx-2" />
-          <Button variant="ghost" size="icon" onClick={resetAll} className="rounded-full">
-            <RotateCcw className="w-4 h-4 text-slate-400" />
-          </Button>
+          <div className="flex items-center gap-3">
+            {appDocument && (
+              <>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => setShowDrafts(!showDrafts)}
+                  className={`gap-2 text-[11px] font-medium transition-all ${showDrafts ? 'text-indigo-600 bg-indigo-50' : 'text-gray-500'}`}
+                >
+                  <History className="w-4 h-4" />
+                  Drafts
+                </Button>
+                <div className="w-px h-4 bg-gray-100 mx-1" />
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={resetAll}
+                  className="text-gray-400 hover:text-red-500 transition-colors w-10 h-10 p-0"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </Button>
+                <Button 
+                   onClick={() => exportDocx(appDocument, formValues)}
+                   className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-5 h-11 text-[11px] font-semibold shadow-xl shadow-indigo-100 transition-all border-none"
+                >
+                   <Download className="w-4 h-4 mr-2" />
+                   Generate Report
+                </Button>
+              </>
+            )}
+          </div>
         </div>
       </header>
 
+      {/* Main Content */}
+      <main className="flex-1 pb-40">
+        <div className="max-w-6xl mx-auto px-8">
+          <AnimatePresence mode="wait">
+            {!appDocument ? (
+              <motion.div
+                key="welcome"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="mt-20"
+              >
+                <div className="text-center space-y-4 max-w-xl mx-auto mb-16">
+                  <h2 className="text-4xl font-semibold tracking-tight text-gray-900 leading-tight">
+                    Transform your practicum into <span className="text-indigo-600">intelligence</span>.
+                  </h2>
+                  <p className="text-gray-400 text-lg leading-relaxed font-medium">
+                    Upload your template and we'll map all student sections semantically for effortless completion.
+                  </p>
+                </div>
+                <FileUploader />
+              </motion.div>
+            ) : (
+              <motion.div
+                key="workspace"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="pt-12 space-y-20"
+              >
+                {analysisProgress > 0 && analysisProgress < 100 && (
+                  <div className="max-w-md mx-auto py-20">
+                    <AnalysisProgress />
+                  </div>
+                )}
 
-      <main className="max-w-[1500px] mx-auto p-12 space-y-12">
-        {!appDocument ? (
-          <motion.div
-            key="uploader"
-            initial={{ opacity: 0, scale: 0.98 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="flex justify-center items-center min-h-[50vh]"
-          >
-            <div className="w-full max-w-xl text-center space-y-8">
-              <div className="space-y-4">
-                <h1 className="text-5xl font-black tracking-tighter">Professional <span className="text-slate-300">Automation.</span></h1>
-                <p className="text-slate-500 text-sm font-medium uppercase tracking-[0.2em]">Upload your practicum template to begin</p>
-              </div>
-              <FileUploader />
-              {isLoading && (
-                <div className="space-y-3">
-                  <div className="flex justify-between items-end">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Analyzing Protocol...</span>
-                    <span className="text-xs font-bold">{analysisProgress}%</span>
-                  </div>
-                  <Progress value={analysisProgress} className="h-1" />
-                </div>
-              )}
-            </div>
-          </motion.div>
-        ) : (
-          <>
-            {/* Template Card */}
-            <motion.div 
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-white dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 rounded-3xl p-10 shadow-sm flex flex-col md:flex-row justify-between items-center gap-8"
-            >
-              <div className="space-y-2">
-                <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Document Template</h3>
-                <div className="flex flex-col gap-1">
-                  <span className="text-lg font-bold text-slate-900 dark:text-zinc-100">{appDocument.name}</span>
-                  <div className="flex items-center gap-4 text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-                    <span>LATEST SAVE: <span className="text-slate-800">JUNE 2, 2026</span></span>
-                    <span>ENGINE STATUS: <span className="text-green-500">READY</span></span>
-                  </div>
-                </div>
-              </div>
-              <div className="flex gap-4">
-                <Button onClick={handleDownload} className="h-12 px-8 bg-black hover:bg-zinc-800 text-white dark:bg-white dark:text-black rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shadow-black/10">
-                  Generate Document
-                </Button>
-                <Button variant="outline" className="h-12 px-8 rounded-2xl text-[10px] font-black uppercase tracking-widest border-slate-200">
-                  Download Template
-                </Button>
-              </div>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="grid grid-cols-1 lg:grid-cols-12 gap-12 relative"
-            >
-              {/* Preview System (Left) */}
-              <div className={`${showInspector ? 'lg:col-span-4' : 'lg:col-span-7'} space-y-6 transition-all duration-500`}>
-                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-white dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 rounded-xl">
-                    <Layout className="w-4 h-4 text-slate-500" />
-                  </div>
-                  <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-800 dark:text-zinc-300">Professional Preview</h2>
-                </div>
-                <div className="bg-white dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 rounded-[2.5rem] shadow-2xl p-1 h-[900px]">
-                  <div className="bg-slate-50/50 dark:bg-zinc-950/50 rounded-[2.25rem] h-full overflow-hidden">
-                    <DocPreview />
-                  </div>
-                </div>
-              </div>
-
-              {/* Form System (Right) */}
-              <div className={`${(showInspector || showDrafts) ? 'lg:col-span-4' : 'lg:col-span-5'} space-y-6 transition-all duration-500`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-white dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 rounded-xl">
-                      <SlidersHorizontal className="w-4 h-4 text-slate-500" />
+                {(analysisProgress === 100 || (analysisProgress === 0 && appDocument)) && (
+                  <>
+                    {/* Document View */}
+                    <div className="space-y-6">
+                      <div className="flex items-center justify-between px-2">
+                         <div className="flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-indigo-500" />
+                            <h3 className="text-[11px] font-bold text-gray-400 tracking-wider uppercase">High-Fidelity Preview</h3>
+                         </div>
+                         <span className="text-[10px] text-gray-300 font-medium">Standard A4 Layout • ISO 216</span>
+                      </div>
+                      <div className="bg-white/50 rounded-[40px] border border-gray-100 overflow-hidden shadow-sm">
+                        <DocPreview />
+                      </div>
                     </div>
-                    <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-800 dark:text-zinc-300">Intake Protocol</h2>
-                  </div>
-                  <div className="bg-slate-50 dark:bg-zinc-800 px-3 py-1.5 rounded-full border border-slate-100 dark:border-zinc-700">
-                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Progress: {completionRate}%</span>
-                  </div>
-                </div>
-                <div className="h-[900px] overflow-hidden">
-                  <DynamicForm />
-                </div>
-              </div>
 
-              {/* Inspector Panel (Optional Side) */}
-              <AnimatePresence>
-                {showInspector && (
-                  <motion.div
-                    initial={{ opacity: 0, x: 50 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: 50 }}
-                    className="lg:col-span-4 h-[930px]"
-                  >
-                    <DocumentInspector />
-                  </motion.div>
-                )}
-                {showDrafts && (
-                  <motion.div
-                    initial={{ opacity: 0, x: 50 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: 50 }}
-                    className="lg:col-span-4 h-[930px]"
-                  >
-                    <DraftsPanel onClose={() => setShowDrafts(false)} />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </motion.div>
-          </>
-        )}
-      </main>
+                    {/* Editor View */}
+                    <div className="max-w-4xl mx-auto mt-24 space-y-12">
+                      <div className="text-center space-y-3">
+                        <h2 className="text-3xl font-semibold text-gray-900 tracking-tight">Practicum Details</h2>
+                        <p className="text-gray-400 text-sm font-medium">Fill the identified student evaluation sections below.</p>
+                      </div>
+                      
+                      <div className="relative">
+                        <DynamicForm />
+                        
+                        <AnimatePresence>
+                          {showDrafts && (
+                            <div className="fixed inset-y-0 right-0 w-[420px] z-[60] p-6 pr-8 bg-[#fafafb]/80 backdrop-blur-sm pointer-events-none">
+                               <div className="h-full pointer-events-auto">
+                                 <DraftsPanel onClose={() => setShowDrafts(false)} />
+                               </div>
+                            </div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </div>
 
-      <footer className="py-8 border-t border-slate-200 dark:border-zinc-800 mt-20">
-        <div className="container mx-auto px-4 flex flex-col md:flex-row justify-between items-center gap-4 text-xs font-medium text-slate-400 uppercase tracking-widest">
-          <p>© 2026 Practicum Automation Platform</p>
-          <div className="flex items-center gap-6">
-            <span className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-green-500" /> Client-Side Only</span>
-            <span className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-green-500" /> No Data Collection</span>
-          </div>
+                    {/* Quick Save */}
+                    <motion.div 
+                      initial={{ y: 100 }}
+                      animate={{ y: 0 }}
+                      className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 pointer-events-none"
+                    >
+                      <Button 
+                        onClick={handleSaveDraft}
+                        className="bg-white hover:bg-gray-50 text-gray-900 border border-gray-100 rounded-2xl px-6 py-6 shadow-2xl shadow-indigo-100 flex items-center gap-3 group transition-all pointer-events-auto"
+                      >
+                        <div className="w-8 h-8 rounded-xl bg-gray-50 flex items-center justify-center group-hover:bg-indigo-50 transition-colors">
+                           <History className="w-4 h-4 text-gray-400 group-hover:text-indigo-600" />
+                        </div>
+                        <span className="text-xs font-semibold mr-2">Save Progress as Draft</span>
+                        <Badge className="bg-indigo-600 text-[10px] uppercase font-bold py-1">Auto-save</Badge>
+                      </Button>
+                    </motion.div>
+                  </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
-      </footer>
+      </main>
     </div>
   );
 }

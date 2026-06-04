@@ -1,31 +1,86 @@
 import { useStore } from '@/src/store/useStore';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Separator } from '@/components/ui/separator';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Section } from '@/src/types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ListOrdered, Table as TableIcon, AlignLeft, UserCircle, CheckCircle2, Circle, Plus } from 'lucide-react';
+import { 
+  ListOrdered, 
+  Table as TableIcon, 
+  CheckCircle2, 
+  Circle,
+  Plus, 
+  ChevronDown,
+  Monitor,
+  Code2,
+  Library,
+  Box,
+  Cpu,
+  Terminal,
+  Layers
+} from 'lucide-react';
+import { useState } from 'react';
+
+const getResourceIcon = (label: string) => {
+  const l = label.toLowerCase();
+  if (l.includes('operating')) return <Monitor className="w-4 h-4" />;
+  if (l.includes('language')) return <Code2 className="w-4 h-4" />;
+  if (l.includes('library')) return <Library className="w-4 h-4" />;
+  if (l.includes('software')) return <Layers className="w-4 h-4" />;
+  if (l.includes('hardware')) return <Cpu className="w-4 h-4" />;
+  if (l.includes('simulation')) return <Terminal className="w-4 h-4" />;
+  return <Box className="w-4 h-4" />;
+};
 
 export function DynamicForm() {
   const { document, formValues, updateFormValue, setHighlightedField } = useStore();
+  const [activeSection, setActiveSection] = useState<string | null>(null);
 
   if (!document) return null;
 
+  // Initialize first section as active
+  if (!activeSection && document.sections.length > 0) {
+    setActiveSection(document.sections[0].id);
+  }
+
   const renderField = (field: any) => {
     const value = formValues[field.id];
-    const isFilled = !!value;
+    
+    // 1. RESOURCE CARDS (Special UI)
+    if (field.semanticRole === 'resource') {
+      return (
+        <div key={field.id} className="group relative">
+           <div className="flex items-center gap-4 p-4 bg-white border border-gray-100 rounded-2xl hover:border-indigo-100 transition-all hover:shadow-sm">
+             <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center text-gray-400 group-focus-within:bg-indigo-50 group-focus-within:text-indigo-600 transition-colors">
+               {getResourceIcon(field.label)}
+             </div>
+             <div className="flex-1 flex flex-col gap-0.5">
+               <Label className="text-[10px] font-semibold text-gray-400 tracking-wide uppercase">
+                 {field.label}
+               </Label>
+               <input 
+                 placeholder={`Enter ${field.label.toLowerCase()}...`}
+                 className="bg-transparent border-none p-0 text-[13px] font-medium text-gray-900 focus:ring-0 placeholder:text-gray-200"
+                 value={(value as string) || ''}
+                 onFocus={() => setHighlightedField(field.id)}
+                 onBlur={() => setHighlightedField(null)}
+                 onChange={(e) => updateFormValue(field.id, e.target.value)}
+               />
+             </div>
+             {value && (
+               <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="flex-none pr-2">
+                 <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+               </motion.div>
+             )}
+           </div>
+        </div>
+      );
+    }
 
+    // 2. TABLE INPUTS (Card-based rows)
     if (field.type === 'table') {
-      const tableData = (value as string[][]) || Array.from({ length: field.rows || 3 }).map((_, rIdx) => {
+      const tableData = (value as string[][]) || Array.from({ length: 2 }).map((_, rIdx) => {
         const row = field.headers.map(() => '');
-        // Auto-fill S.No if empty
-        if (field.headers[0].toLowerCase().includes('s.no') || field.headers[0].toLowerCase().includes('no')) {
-          row[0] = String(rIdx + 1);
-        }
+        if (field.headers[0]?.toLowerCase().includes('no')) row[0] = String(rIdx + 1);
         return row;
       });
 
@@ -33,141 +88,119 @@ export function DynamicForm() {
         const newData = [...tableData];
         newData[rIdx] = [...newData[rIdx]];
         newData[rIdx][cIdx] = val;
-        
-        // Ensure S.No is preserved if it was deleted or changed manually and headers suggest it's a counter
-        if (cIdx !== 0 && (field.headers[0].toLowerCase().includes('s.no') || field.headers[0].toLowerCase().includes('no')) && !newData[rIdx][0]) {
-           newData[rIdx][0] = String(rIdx + 1);
-        }
-        
         updateFormValue(field.id, newData);
       };
 
       const addRow = () => {
         const newRow = field.headers.map(() => '');
-        if (field.headers[0].toLowerCase().includes('s.no') || field.headers[0].toLowerCase().includes('no')) {
-          newRow[0] = String(tableData.length + 1);
-        }
+        if (field.headers[0]?.toLowerCase().includes('no')) newRow[0] = String(tableData.length + 1);
         updateFormValue(field.id, [...tableData, newRow]);
       };
 
       return (
-        <div key={field.id} className="space-y-4 pt-2">
-          <div className="space-y-2">
+        <div key={field.id} className="space-y-4">
+          <div className="flex items-center justify-between px-1">
+             <div className="flex items-center gap-2">
+               <TableIcon className="w-3.5 h-3.5 text-gray-400" />
+               <Label className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">{field.label}</Label>
+             </div>
+             <Button variant="ghost" onClick={addRow} className="h-7 text-[10px] font-bold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg">
+                <Plus className="w-3 h-3 mr-1" /> Add Entry
+             </Button>
+          </div>
+          <div className="grid gap-3">
             {tableData.map((row, rIdx) => (
-              <motion.div 
-                key={rIdx} 
-                initial={{ opacity: 0, y: 5 }} 
-                animate={{ opacity: 1, y: 0 }}
-                className="flex gap-2"
-              >
-                <div className="flex-none w-8 flex items-center justify-center text-[10px] font-medium text-slate-300 bg-slate-50/50 rounded-lg border border-slate-100">
-                  {rIdx + 1}
+              <div key={rIdx} className="bg-gray-50/50 border border-gray-100 rounded-2xl p-4 flex flex-col gap-4">
+                <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+                   <span className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">Record #{rIdx + 1}</span>
                 </div>
-                <div className="flex-1 grid grid-flow-col auto-cols-fr gap-2">
-                  {field.headers?.slice(1).map((_: any, chIdx: number) => {
-                    const cIdx = chIdx + 1;
-                    return (
+                <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                  {field.headers?.map((hName: string, cIdx: number) => (
+                    <div key={cIdx} className="space-y-1.5 px-1">
+                      <Label className="text-[10px] font-medium text-gray-400 tracking-tight">{hName}</Label>
                       <input
-                        key={cIdx}
-                        className="w-full bg-white dark:bg-zinc-950 border border-slate-100 dark:border-zinc-800 rounded-lg px-3 py-2 text-[11px] focus:outline-none focus:border-slate-300 dark:focus:border-zinc-600 transition-all placeholder:text-slate-200"
+                        className="w-full bg-white border border-gray-100 rounded-xl px-3 py-2 text-[12px] font-medium focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
                         value={row[cIdx] || ""}
                         onFocus={() => setHighlightedField(field.id)}
                         onBlur={() => setHighlightedField(null)}
                         onChange={(e) => updateTableCell(rIdx, cIdx, e.target.value)}
-                        placeholder={field.headers[cIdx]}
+                        placeholder="..."
                       />
-                    );
-                  })}
+                    </div>
+                  ))}
                 </div>
-              </motion.div>
-            ))}
-          </div>
-          {field.isDynamic && (
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              onClick={addRow}
-              className="w-full border border-dashed border-slate-100 text-[10px] uppercase font-bold tracking-widest text-slate-400 hover:text-black hover:bg-slate-50 transition-all py-6 h-auto"
-            >
-              <Plus className="w-3 h-3 mr-2" /> Add {field.label.split(' ')[0]} Row
-            </Button>
-          )}
-        </div>
-      );
-    }
-
-    if (field.type === 'list') {
-      const listData = (value as string[]) || Array.from({ length: field.rows || 6 }).map(() => '');
-
-      const updateListItem = (idx: number, val: string) => {
-        const newData = [...listData];
-        newData[idx] = val;
-        updateFormValue(field.id, newData);
-      };
-
-      const addStep = () => {
-        updateFormValue(field.id, [...listData, '']);
-      };
-
-      const addButtonLabel = field.label.toLowerCase().includes('procedure') ? 'Step' : 'List Item';
-
-      return (
-        <div key={field.id} className="space-y-4 pt-2">
-          <div className="space-y-2.5">
-            {listData.map((item, idx) => (
-              <div key={idx} className="flex gap-4 items-center group">
-                <span className="text-[10px] font-bold text-slate-300 w-4 pl-1">{idx + 1}.</span>
-                <input
-                  className="flex-1 rounded-lg border border-slate-100 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-4 py-2.5 text-xs focus:outline-none focus:border-slate-300 dark:focus:border-zinc-600 transition-all placeholder:text-slate-200"
-                  value={item || ""}
-                  onFocus={() => setHighlightedField(field.id)}
-                  onBlur={() => setHighlightedField(null)}
-                  onChange={(e) => updateListItem(idx, e.target.value)}
-                  placeholder="..."
-                />
               </div>
             ))}
           </div>
-          {field.isDynamic && (
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              onClick={addStep}
-              className="w-full border border-dashed border-slate-100 text-[10px] uppercase font-bold tracking-widest text-slate-400 hover:text-black hover:bg-slate-50 transition-all py-6 h-auto"
-            >
-              <Plus className="w-3 h-3 mr-2" /> Add {addButtonLabel}
-            </Button>
-          )}
         </div>
       );
     }
 
+    // 3. STEPPED LISTS (Procedure/Results)
+    if (field.semanticRole === 'procedure' || field.semanticRole === 'result' || field.type === 'procedure-steps') {
+       const items = (value as string[]) || ['', ''];
+       const updateItem = (idx: number, val: string) => {
+         const newItems = [...items];
+         newItems[idx] = val;
+         updateFormValue(field.id, newItems);
+       };
+       const addItem = () => updateFormValue(field.id, [...items, '']);
+
+       const label = field.semanticRole === 'result' ? 'Expected Result' : 'Action Step';
+
+       return (
+         <div key={field.id} className="space-y-4">
+           <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-2">
+                <ListOrdered className="w-3.5 h-3.5 text-gray-400" />
+                <Label className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">{field.label}</Label>
+              </div>
+              <Button variant="ghost" onClick={addItem} className="h-7 text-[10px] font-bold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg">
+                <Plus className="w-3 h-3 mr-1" /> Add Step
+              </Button>
+           </div>
+           <div className="space-y-3">
+             {items.map((item, idx) => (
+               <div key={idx} className="flex gap-4 p-1">
+                 <div className="flex-none w-10 h-10 flex items-center justify-center bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold text-gray-400">
+                   {idx + 1}
+                 </div>
+                 <textarea
+                   className="flex-1 min-h-[50px] bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] leading-relaxed focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 outline-none transition-all resize-none font-medium placeholder:text-gray-200"
+                   placeholder={`Describe ${label.toLowerCase()}...`}
+                   value={item}
+                   onFocus={() => setHighlightedField(field.id)}
+                   onBlur={() => setHighlightedField(null)}
+                   onChange={(e) => updateItem(idx, e.target.value)}
+                 />
+               </div>
+             ))}
+           </div>
+         </div>
+       );
+    }
+
+    // 4. LARGE TEXT AREAS
+    const isLarge = field.semanticRole === 'interpretation' || field.semanticRole === 'conclusion' || field.type === 'textarea';
+
     return (
-      <div key={field.id} className="space-y-3">
-        <div className="flex justify-between items-center group">
-          <Label className="text-[11px] font-semibold text-slate-800 dark:text-zinc-200">
-            {field.label}
-          </Label>
-        </div>
-        
-        {field.type === 'textarea' ? (
-          <div className="relative">
-            <textarea 
-              placeholder="Enter details..."
-              className="w-full min-h-[100px] rounded-xl border border-slate-100 dark:border-zinc-800 bg-white dark:bg-zinc-950 focus:outline-none focus:border-slate-300 dark:focus:border-zinc-600 transition-all resize-none p-4 text-xs leading-relaxed"
-              value={(value as string) || ''}
-              onFocus={() => setHighlightedField(field.id)}
-              onBlur={() => setHighlightedField(null)}
-              onChange={(e) => updateFormValue(field.id, e.target.value)}
-            />
-            <div className="absolute right-3 bottom-3 text-slate-300 pointer-events-none">
-               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-            </div>
-          </div>
+      <div key={field.id} className="space-y-2 px-1">
+        <Label className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+          {field.label}
+        </Label>
+        {isLarge ? (
+          <textarea 
+            placeholder={`Reflect on ${field.label.toLowerCase()}...`}
+            className="w-full min-h-[180px] rounded-2xl border border-gray-100 bg-white focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all outline-none p-6 text-[13px] leading-relaxed font-medium placeholder:text-gray-200"
+            value={(value as string) || ''}
+            onFocus={() => setHighlightedField(field.id)}
+            onBlur={() => setHighlightedField(null)}
+            onChange={(e) => updateFormValue(field.id, e.target.value)}
+          />
         ) : (
           <input 
-            placeholder="Type here..."
-            className="w-full rounded-xl h-11 border border-slate-100 dark:border-zinc-800 bg-white dark:bg-zinc-950 focus:outline-none focus:border-slate-300 dark:focus:border-zinc-600 transition-all px-4 text-xs"
+            placeholder="Type standard entry..."
+            className="w-full rounded-xl h-11 border border-gray-100 bg-white px-4 text-[13px] font-medium focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all outline-none"
             value={(value as string) || ''}
             onFocus={() => setHighlightedField(field.id)}
             onBlur={() => setHighlightedField(null)}
@@ -179,70 +212,73 @@ export function DynamicForm() {
   };
 
   return (
-    <ScrollArea className="h-full pr-4 -mr-4">
-      <div className="space-y-8 pb-32">
-        {document.sections.map((section: Section, sIdx: number) => {
-          const filledFields = section.fields.filter(f => {
-            const val = formValues[f.id];
-            if (Array.isArray(val)) return val.some(v => v !== '');
-            return !!val;
-          }).length;
-          
-          const totalFields = section.fields.length;
-          const isComplete = totalFields > 0 && filledFields === totalFields;
+    <div className="space-y-4">
+      {document.sections.map((section: Section, sIdx: number) => {
+        const isOpen = activeSection === section.id;
+        const filledFields = section.fields.filter(f => {
+          const val = formValues[f.id];
+          if (Array.isArray(val)) return val.some(v => v !== '');
+          return !!val;
+        }).length;
+        const totalFields = section.fields.length;
+        const isCompleted = totalFields > 0 && filledFields === totalFields;
 
-          return (
-            <motion.div 
-              key={section.id}
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: sIdx * 0.05 }}
-              className={`relative border rounded-3xl p-10 transition-all duration-500 overflow-hidden ${
-                isComplete 
-                ? 'border-green-400/20 bg-green-50/5 dark:bg-green-950/5 shadow-lg shadow-green-500/5' 
-                : 'border-slate-100 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm hover:shadow-md'
-              }`}
+        return (
+          <div 
+            key={section.id} 
+            className={`border rounded-[24px] overflow-hidden transition-all duration-300 ${
+              isOpen ? 'bg-white border-indigo-100 shadow-xl shadow-indigo-100/20' : 'bg-gray-50/30 border-gray-100'
+            }`}
+          >
+            <button 
+              onClick={() => setActiveSection(isOpen ? null : section.id)}
+              className="w-full flex items-center justify-between p-6 text-left"
             >
-              {isComplete && (
-                <div className="absolute top-0 right-0 p-6">
-                   <div className="bg-green-500 rounded-full p-1 shadow-lg shadow-green-500/20">
-                     <CheckCircle2 className="w-4 h-4 text-white" />
-                   </div>
+              <div className="flex items-center gap-4">
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
+                  isCompleted ? 'bg-emerald-50 text-emerald-600' : (isOpen ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-100 text-gray-400')
+                }`}>
+                   {isCompleted ? <CheckCircle2 className="w-4 h-4" /> : <Circle className="w-2 h-2 fill-current" />}
                 </div>
-              )}
+                <div>
+                   <h3 className="text-sm font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors">{section.title}</h3>
+                   <span className="text-[10px] text-gray-400 font-medium">{filledFields} of {totalFields} fields completed</span>
+                </div>
+              </div>
+              <ChevronDown className={`w-4 h-4 text-gray-300 transition-transform duration-300 ${isOpen ? 'rotate-180 text-indigo-400' : ''}`} />
+            </button>
 
-          <div className="flex flex-col gap-1 mb-10">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-[10px] font-black text-slate-300 dark:text-zinc-700 uppercase tracking-[0.3em]">Phase {sIdx + 1}</span>
-                    <div className="h-[1px] w-24 bg-slate-50 dark:bg-zinc-800" />
-                  </div>
-                  {isComplete && (
-                    <div className="flex items-center gap-2 px-3 py-1 bg-green-50 dark:bg-green-950/30 rounded-full border border-green-100 dark:border-green-900/50">
-                      <CheckCircle2 className="w-3 h-3 text-green-500" />
-                      <span className="text-[9px] font-black text-green-600 uppercase tracking-widest">Verified</span>
+            <AnimatePresence>
+              {isOpen && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.3, ease: 'easeInOut' }}
+                >
+                  <div className="p-8 pt-0 space-y-10">
+                    <div className="grid gap-8">
+                       {section.fields.map(renderField)}
                     </div>
-                  )}
-                </div>
-                <h3 className="text-2xl font-black text-slate-900 dark:text-zinc-100 tracking-tighter mt-4 capitalize">
-                  {section.title.toLowerCase()}
-                </h3>
-              </div>
-
-              <div className="space-y-8">
-                {section.fields.map(renderField)}
-                {section.fields.length === 0 && (
-                  <div className="py-6 px-6 bg-slate-50/30 dark:bg-zinc-800/30 rounded-xl border border-dashed border-slate-100 dark:border-zinc-700 text-center">
-                    <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest italic">
-                      No faculty comments yet.
-                    </p>
                   </div>
-                )}
-              </div>
-            </motion.div>
-          );
-        })}
-      </div>
-    </ScrollArea>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        );
+      })}
+
+      {!document.sections.length && (
+         <div className="py-20 text-center space-y-4">
+            <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto">
+               <Layers className="w-6 h-6 text-gray-300" />
+            </div>
+            <div className="space-y-1">
+               <h4 className="text-sm font-semibold text-gray-900">No input fields found</h4>
+               <p className="text-xs text-gray-400">We couldn't detect any student sections in this document.</p>
+            </div>
+         </div>
+      )}
+    </div>
   );
 }

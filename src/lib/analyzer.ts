@@ -39,7 +39,8 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
   const excludedSections = [
     'Theory', 'Algorithm', 'Algorithms', 'Practical Significance', 'Safety Precautions',
-    'References', 'Assessment Scheme', 'Competency', 'Outcomes', 'Resources Required'
+    'References', 'Assessment Scheme', 'Competency', 'Outcomes', 'Resources Required',
+    'Suggested Questions'
   ];
 
   const studentEntrySections = [
@@ -48,153 +49,172 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     'Faculty Details', 'Problem-wise Algorithm', 'Summary'
   ];
 
-  // Get all direct structural children of body
-  const children = Array.from(body.childNodes).filter(node => 
+  const facultyAssessmentSections = [
+    'Marks Obtained', 'Faculty Evaluation', 'Assessment Scheme', 'Performance Indicators',
+    'Faculty Comments'
+  ];
+
+  // Get all structural elements with their context
+  const structuralElements = Array.from(body.childNodes).filter(node => 
     node.nodeName === 'w:p' || node.nodeName === 'w:tbl'
   );
 
-  children.forEach((node, index) => {
-    const text = node.textContent?.trim() || '';
+  const paragraphs = getElementsByTagName(body, 'p');
+  const tables = getElementsByTagName(body, 'tbl');
+  const processedNodeIndices = new Set<number>();
+
+  let lastSectionHeaderIndex = -1;
+
+  structuralElements.forEach((node, index) => {
+    if (processedNodeIndices.has(index)) return;
     
-    // Header Detection (w:p usually carries headers)
+    const text = node.textContent?.trim() || '';
+    const textLower = text.toLowerCase();
+    
+    // Header Detection & Section Partitioning
     if (node.nodeName === 'w:p') {
-      const isHeader = (studentEntrySections.some(cs => 
-        text.toLowerCase().includes(cs.toLowerCase())
-      ) || excludedSections.some(cs => 
-        text.toLowerCase().includes(cs.toLowerCase())
-      ) || /^[VIX]+\.\s/.test(text) || text.includes('To be filled by student')) && text.length < 150;
+      const isHeader = (
+        studentEntrySections.some(cs => textLower.includes(cs.toLowerCase())) || 
+        excludedSections.some(cs => textLower.includes(cs.toLowerCase())) ||
+        facultyAssessmentSections.some(cs => textLower.includes(cs.toLowerCase())) ||
+        /^[VIX]+\.\s/.test(text) || 
+        text.includes('To be filled by student')
+      ) && text.length < 150;
 
       if (isHeader) {
+        // Finalize previous section range if it was a paragraph field
+        if (currentSection.intent === 'student-fillable') {
+          const textFields = currentSection.fields.filter(f => f.mapping?.type === 'paragraph');
+          if (textFields.length === 1 && textFields[0].mapping) {
+            textFields[0].mapping.endParagraph = paragraphs.indexOf(structuralElements[index - 1] as any);
+          }
+        }
+
         if (currentSection.fields.length > 0 || currentSection.id !== 'root') {
           sections.push({ ...currentSection, content: currentSection.content.trim() });
         }
+
+        let intent: Section['intent'] = 'template-static';
+        if (studentEntrySections.some(ss => textLower.includes(ss.toLowerCase())) || textLower.includes('to be filled by student')) {
+          intent = 'student-fillable';
+        } else if (facultyAssessmentSections.some(fs => textLower.includes(fs.toLowerCase()))) {
+          intent = 'faculty-evaluation';
+        }
+
         currentSection = {
           id: `section-${index}`,
           title: text,
           content: '',
-          fields: []
+          fields: [],
+          intent
         };
-      } else {
-        currentSection.content += text + '\n';
+        lastSectionHeaderIndex = index;
+        return;
       }
+    }
 
-      // Placeholder detection in paragraphs
-      const dotsPattern = /\.{10,}/g;
-      const underscoresPattern = /_{10,}/g;
-      
-      const isExcluded = excludedSections.some(es => 
-        currentSection.title.toLowerCase().includes(es.toLowerCase())
-      );
+    // Process content within the current section based on its intent
+    if (currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation') {
+      const titleLower = currentSection.title.toLowerCase();
 
-      if (!isExcluded) {
-        let fieldIdx = 0;
-        let match;
-        while ((match = dotsPattern.exec(text)) !== null) {
-          currentSection.fields.push({
-            id: `field-${index}-dot-${fieldIdx}`,
-            label: 'Fill in details',
-            type: 'text',
-            sectionId: currentSection.id,
-            originalPattern: match[0],
-            mapping: {
-              type: 'paragraph',
-              paragraphIndex: getElementsByTagName(body, 'p').indexOf(node as any)
+      // CASE A: TABLE SECTIONS (Resources / Observations / Assessment)
+      if (node.nodeName === 'w:tbl') {
+        const tableIdx = tables.indexOf(node as any);
+        
+        if (titleLower.includes('resources used')) {
+          const trs = getElementsByTagName(node as any, 'tr');
+          trs.forEach((tr, rIdx) => {
+            const cells = getElementsByTagName(tr, 'tc');
+            const rowLabel = cells[1]?.textContent?.trim() || cells[0]?.textContent?.trim() || '';
+            const rowLabelLower = rowLabel.toLowerCase();
+            const commonLabels = ['operating system', 'programming language', 'sdk', 'libraries', 'hardware', 'simulation'];
+            if (commonLabels.some(l => rowLabelLower.includes(l))) {
+              currentSection.fields.push({
+                id: `res-${tableIdx}-${rIdx}`,
+                label: rowLabel,
+                type: 'text',
+                sectionId: currentSection.id,
+                semanticRole: 'resource',
+                mapping: { type: 'table-cell', tableIndex: tableIdx, rowIndex: rIdx, cellIndex: 2 }
+              });
             }
           });
-          fieldIdx++;
+        } else if (titleLower.includes('observation') || titleLower.includes('result') || titleLower.includes('evaluation')) {
+          currentSection.fields.push({
+            id: `tbl-${tableIdx}`,
+            label: currentSection.title,
+            type: 'table',
+            sectionId: currentSection.id,
+            semanticRole: titleLower.includes('observation') ? 'observation' : 'result',
+            headers: [],
+            mapping: { type: 'table-cell', tableIndex: tableIdx }
+          });
         }
+        return;
       }
-    }
 
-    // Table Detection
-    if (node.nodeName === 'w:tbl') {
-      const prevNode = children[index - 1];
-      const prevText = prevNode?.textContent?.toLowerCase() || '';
-      console.log(`ANALYZER DEBUG: Evaluating table after paragraph: "${prevText.substring(0, 50)}..."`);
-      
-      const isExcluded = excludedSections.some(es => 
-        currentSection.title.toLowerCase().includes(es.toLowerCase()) || prevText.includes(es.toLowerCase())
-      );
-      
-      const isStudentTarget = studentEntrySections.some(ss => 
-        currentSection.title.toLowerCase().includes(ss.toLowerCase()) || 
-        prevText.includes(ss.toLowerCase()) ||
-        text.toLowerCase().includes(ss.toLowerCase())
-      ) || text === '';
-
-      if (!isExcluded && isStudentTarget) {
-        const tableIdx = getElementsByTagName(body, 'tbl').indexOf(node as any);
-        console.log(`ANALYZER DEBUG: Table matched student target criteria. Assigning index ${tableIdx}`);
+      // CASE B: PARAGRAPH SECTIONS (Procedure, Results, Conclusion, Interpretation, Comments)
+      if (node.nodeName === 'w:p') {
+        const pIdx = paragraphs.indexOf(node as any);
+        const hasPlaceholder = text.includes('...') || text.includes('___');
         
-        // Better label detection from preceding paragraph
-        let tableLabel = currentSection.title;
-        if (prevText && prevText.length < 100 && (prevText.includes('actual') || prevText.includes('observation') || prevText.includes('resource'))) {
-           tableLabel = prevNode?.textContent?.trim() || tableLabel;
-        }
+        // If we found a placeholder and we don't have a paragraph field for this section yet, create one
+        const existingTextField = currentSection.fields.find(f => f.mapping?.type === 'paragraph');
+        
+        if (hasPlaceholder && !existingTextField) {
+          const role = titleLower.includes('procedure') ? 'procedure' :
+                       titleLower.includes('result') ? 'result' :
+                       titleLower.includes('interpretation') ? 'interpretation' :
+                       titleLower.includes('conclusion') ? 'conclusion' : undefined;
 
-        currentSection.fields.push({
-          id: `field-tbl-${tableIdx}`,
-          label: tableLabel,
-          type: 'table',
-          sectionId: currentSection.id,
-          headers: ['S.No', 'Col 1', 'Col 2', 'Col 3'], // Default, will be normalized
-          rows: 4,
-          isDynamic: true,
-          mapping: {
-            type: 'table-cell',
-            tableIndex: tableIdx
-          }
-        });
+          currentSection.fields.push({
+            id: `text-${pIdx}`,
+            label: currentSection.title,
+            type: 'textarea',
+            sectionId: currentSection.id,
+            semanticRole: role as any,
+            originalPattern: text.match(/\.{5,}|_{5,}/)?.[0],
+            mapping: {
+              type: 'paragraph',
+              startParagraph: pIdx,
+              // endParagraph will be filled when next section starts or loop ends
+            }
+          });
+          return;
+        }
       }
     }
+    
+    currentSection.content += text + '\n';
   });
+
+  // Final range check for the very last section
+  if (currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation') {
+    const textFields = currentSection.fields.filter(f => f.mapping?.type === 'paragraph');
+    if (textFields.length === 1 && textFields[0].mapping && textFields[0].mapping.endParagraph === undefined) {
+      textFields[0].mapping.endParagraph = paragraphs.length - 1;
+    }
+  }
 
   if (currentSection.fields.length > 0 || currentSection.id !== 'root') {
     sections.push({ ...currentSection, content: currentSection.content.trim() });
   }
 
-  // Filter and enhance
-  const finalizedSections = sections.filter(s => {
-    const titleLower = s.title.toLowerCase();
-    const isExcluded = excludedSections.some(es => titleLower.includes(es.toLowerCase()));
-    
-    // Explicitly allow sections that users are likely to fill even if they match excluded keywords but have student markers
-    const isStudentTarget = studentEntrySections.some(ss => titleLower.includes(ss.toLowerCase())) || 
-                           titleLower.includes('to be filled by student');
-    
-    return (s.fields.length > 0 && !isExcluded) || isStudentTarget;
-  }).map(s => {
-    const titleLower = s.title.toLowerCase();
-    
-    // Normalize headers for specific known sections to ensure UI matches expected lab format
-    if (titleLower.includes('resources used')) {
-      s.fields = s.fields.map(f => {
-        if (f.type === 'table') {
-          return { 
-            ...f, 
-            label: 'Actual Resources Used',
-            headers: ['S.No', 'Name of Resource', 'Version / Configuration', 'Remarks'],
-            rows: 5 
-          };
+  // Refine and Normalize headers for tables
+  const finalizedSections = sections.filter(s => s.intent === 'student-fillable').map(s => {
+    s.fields = s.fields.map(f => {
+      if (f.type === 'table') {
+        const tableIdx = f.mapping?.tableIndex;
+        if (tableIdx !== undefined && tables[tableIdx]) {
+          const trs = getElementsByTagName(tables[tableIdx], 'tr');
+          if (trs[0]) {
+            const headerCells = getElementsByTagName(trs[0], 'tc');
+            f.headers = headerCells.map(c => c.textContent?.trim() || '');
+          }
         }
-        return f;
-      });
-    }
-    
-    if (titleLower.includes('observations')) {
-      s.fields = s.fields.map(f => {
-        if (f.type === 'table') {
-          return {
-            ...f,
-            label: 'Observations Table',
-            headers: ['S.No', 'Step / Parameter', 'Expected result', 'Actual Result'],
-            rows: 5
-          };
-        }
-        return f;
-      });
-    }
-    
+      }
+      return f;
+    });
     return s;
   });
 

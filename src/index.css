@@ -5,57 +5,65 @@
   --font-sans: "Inter", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", monospace;
   --font-serif: "Times New Roman", Times, serif;
+
+  /* SaaS Palette */
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+  --primary: 221.2 83.2% 53.3%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 221.2 83.2% 53.3%;
+  --radius: 0.75rem;
 }
 
 @layer base {
   body {
-    @apply antialiased bg-slate-50 dark:bg-zinc-950;
+    @apply bg-[#fafafb] text-slate-900 antialiased;
   }
 }
 
-.docx-preview table {
-  @apply border-collapse w-full border border-slate-200 my-4;
+.docx-preview {
+  @apply bg-white shadow-xl ring-1 ring-gray-100;
   font-family: var(--font-serif);
-}
-
-.docx-preview td, .docx-preview th {
-  @apply border border-slate-200 p-2 text-sm;
-}
-
-.docx-preview h1, .docx-preview h2, .docx-preview h3 {
-  @apply font-bold mt-6 mb-2 text-black dark:text-white uppercase tracking-tight;
 }
 
 .docx-preview p {
-  @apply my-2 leading-relaxed text-slate-600 dark:text-zinc-400 text-sm;
-  font-family: var(--font-serif);
+  @apply mb-4 leading-relaxed text-gray-800 text-sm;
+}
+
+.docx-preview table {
+  @apply border-collapse w-full border border-gray-200 my-6;
+}
+
+.docx-preview td, .docx-preview th {
+  @apply border border-gray-200 p-2 text-sm;
 }
 
 .detected-field {
-  @apply bg-green-50 border-b-2 border-green-300 px-1 inline-block;
+  @apply bg-indigo-50/50 border-b border-indigo-200 transition-all cursor-default;
 }
 
 .highlighted-field {
-  @apply bg-blue-50 border-2 border-blue-500 rounded-sm px-1;
+  @apply !bg-indigo-100/80 !border-indigo-500 shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)];
 }
 
-/* Custom Scrollbar for SaaS look */
-::-webkit-scrollbar {
-  width: 6px;
-}
-
-::-webkit-scrollbar-track {
-  @apply bg-transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  @apply bg-slate-200 dark:bg-zinc-800 rounded-full hover:bg-slate-300 dark:hover:bg-zinc-700 transition-colors;
-}
-
-/* High Fidelity DOCX Viewer Styles */
+/* Document Viewer Container */
 .docx-viewer-container {
   @apply flex flex-col items-center w-full;
-  font-family: var(--font-serif) !important;
+  background-color: transparent !important;
 }
 
 .docx-high-fidelity section {

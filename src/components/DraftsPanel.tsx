@@ -8,11 +8,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 export function DraftsPanel({ onClose }: { onClose: () => void }) {
   const [drafts, setDrafts] = useState<Draft[]>([]);
-  const { setFormValues, document } = useStore();
+  const { setFormValues } = useStore();
 
-  useEffect(() => {
-    loadDrafts();
-  }, []);
+  useEffect(() => { loadDrafts(); }, []);
 
   const loadDrafts = async () => {
     const list = await db.getDrafts();
@@ -35,14 +33,14 @@ export function DraftsPanel({ onClose }: { onClose: () => void }) {
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 20 }}
-      className="bg-white dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 rounded-3xl p-8 shadow-2xl h-full flex flex-col"
+      className="bg-white border border-gray-100 rounded-[32px] p-8 shadow-2xl h-full flex flex-col"
     >
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">
-          <History className="w-4 h-4 text-slate-400" />
-          <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-800 dark:text-zinc-300">Local Drafts</h2>
+          <History className="w-5 h-5 text-indigo-600" />
+          <h2 className="text-sm font-semibold text-gray-900">Local Drafts</h2>
         </div>
-        <Button variant="ghost" size="icon" onClick={onClose} className="rounded-full">
+        <Button variant="ghost" size="icon" onClick={onClose} className="rounded-full h-8 w-8 text-gray-400">
           <X className="w-4 h-4" />
         </Button>
       </div>
@@ -50,28 +48,28 @@ export function DraftsPanel({ onClose }: { onClose: () => void }) {
       <ScrollArea className="flex-1">
         <div className="space-y-3">
           {drafts.length === 0 ? (
-            <div className="p-12 text-center border-2 border-dashed border-slate-50 dark:border-zinc-800 rounded-2xl">
-              <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">No drafts found</p>
+            <div className="py-20 text-center border-2 border-dashed border-gray-50 rounded-3xl">
+              <p className="text-xs font-medium text-gray-300">No recent drafts</p>
             </div>
           ) : (
             drafts.map((draft) => (
               <div 
                 key={draft.id}
                 onClick={() => handleSelect(draft)}
-                className="group p-4 bg-slate-50 dark:bg-zinc-950/50 border border-slate-100 dark:border-zinc-800 rounded-2xl cursor-pointer hover:border-slate-300 dark:hover:border-zinc-600 transition-all"
+                className="group p-4 bg-gray-50/50 border border-gray-50 rounded-2xl cursor-pointer hover:border-indigo-100 transition-all hover:bg-white"
               >
                 <div className="flex justify-between items-start">
                   <div className="space-y-1">
-                    <p className="text-[11px] font-bold text-slate-900 dark:text-zinc-100 line-clamp-1">{draft.templateName}</p>
-                    <p className="text-[9px] font-medium text-slate-400 uppercase tracking-widest">
-                      {new Date(draft.timestamp).toLocaleString()}
+                    <p className="text-[13px] font-semibold text-gray-900 line-clamp-1">{draft.templateName}</p>
+                    <p className="text-[10px] font-medium text-gray-400 uppercase tracking-widest">
+                      {new Date(draft.timestamp).toLocaleTimeString()} • {new Date(draft.timestamp).toLocaleDateString()}
                     </p>
                   </div>
                   <button 
                     onClick={(e) => handleDelete(e, draft.id)}
-                    className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-red-500 transition-all"
+                    className="opacity-0 group-hover:opacity-100 p-2 text-gray-300 hover:text-red-500 transition-all"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </div>

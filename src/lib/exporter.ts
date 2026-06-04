@@ -55,20 +55,124 @@ export class DocumentFiller {
   fill(docData: DocumentData, formValues: Record<string, any>) {
     if (!this.xmlDoc) throw new Error("Filler not loaded");
 
+    console.log("--- EXPORTER: STARTING SECTION MAPPING VALIDATION ---");
+    const mappingsSummary: any[] = [];
+
     docData.sections.forEach(section => {
       section.fields.forEach(field => {
         const value = formValues[field.id];
-        if (!field.mapping) return;
+        if (!field.mapping || value === undefined || value === null) return;
 
         const mapping = field.mapping;
+        
+        mappingsSummary.push({
+          section: section.title,
+          field: field.label,
+          role: field.semanticRole,
+          target: mapping.startParagraph !== undefined ? `P:${mapping.startParagraph}-${mapping.endParagraph}` : `T:${mapping.tableIndex}`,
+          value: Array.isArray(value) ? `${value.length} items` : (String(value).substring(0, 30) + '...')
+        });
 
-        if (mapping.type === 'paragraph' && mapping.paragraphIndex !== undefined) {
-          this.injectIntoParagraph(mapping.paragraphIndex, value, field.originalPattern);
+        if (mapping.type === 'paragraph' && mapping.startParagraph !== undefined && mapping.endParagraph !== undefined) {
+          this.fillTextSection(mapping.startParagraph, mapping.endParagraph, value, field.originalPattern);
         } else if (mapping.type === 'table-cell' && mapping.tableIndex !== undefined) {
-          this.injectIntoTable(mapping.tableIndex, value);
+          if (field.semanticRole === 'resource') {
+            this.injectIntoSpecificCell(mapping.tableIndex, mapping.rowIndex!, mapping.cellIndex!, value);
+          } else {
+            this.injectIntoTable(mapping.tableIndex, value);
+          }
+        } else if (mapping.type === 'paragraph' && mapping.paragraphIndex !== undefined) {
+          // Fallback for single paragraph mapping
+          this.injectIntoParagraph(mapping.paragraphIndex, value, field.originalPattern);
         }
       });
     });
+
+    console.table(mappingsSummary);
+    console.log("--- EXPORTER: SECTION MAPPING VALIDATION COMPLETE ---");
+  }
+
+  private fillTextSection(startIdx: number, endIdx: number, value: any, pattern?: string) {
+    console.log(`FILLER: Filling Text Section P[${startIdx}-${endIdx}]`);
+    const lines = String(value || "").split('\n');
+    let currentPIdx = startIdx;
+
+    // We only want to search for the pattern in the FIRST paragraph of the range usually, 
+    // or across the whole range if it's a dotted block.
+    
+    lines.forEach((line, i) => {
+      if (currentPIdx <= endIdx) {
+        // If it's a dotted line paragraph, we replace the dots. 
+        // If it's the first line and we have a pattern, use it.
+        const targetP = this.paragraphs[currentPIdx];
+        const pText = targetP?.textContent || '';
+        const pPattern = pText.match(/\.{5,}|_{5,}/)?.[0] || (i === 0 ? pattern : undefined);
+
+        this.injectIntoParagraph(currentPIdx, line, pPattern);
+        currentPIdx++;
+      } else {
+        // Range exceeded, word naturally expands
+        this.appendNewParagraphAfter(currentPIdx - 1, line);
+        currentPIdx++;
+      }
+    });
+
+    // Clear remaining paragraphs in the identified placeholder range
+    while (currentPIdx <= endIdx) {
+       const targetP = this.paragraphs[currentPIdx];
+       const pText = targetP?.textContent || '';
+       const pPattern = pText.match(/\.{5,}|_{5,}/)?.[0];
+       if (pPattern) {
+         this.injectIntoParagraph(currentPIdx, "", pPattern);
+       } else {
+         // If no dots, maybe it was just extra space? don't clear it if it looks like content
+       }
+       currentPIdx++;
+    }
+  }
+
+  private injectIntoSpecificCell(tIdx: number, rIdx: number, cIdx: number, value: any) {
+    const tbl = this.tables[tIdx];
+    if (!tbl) return;
+    const trs = this.getElementsByTagName(tbl, 'tr');
+    const tr = trs[rIdx];
+    if (!tr) return;
+    const tcs = this.getElementsByTagName(tr, 'tc');
+    const tc = tcs[cIdx];
+    if (!tc) return;
+
+    let t = this.getElementsByTagName(tc, 't')[0];
+    if (!t) {
+       const p = this.getElementsByTagName(tc, 'p')[0] || this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:p');
+       if (!p.parentElement) tc.appendChild(p);
+       const r = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:r');
+       t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
+       r.appendChild(t);
+       p.appendChild(r);
+    }
+    t.textContent = String(value || "");
+    
+    // Style enforcement
+    const run = t.parentElement;
+    if (run) {
+       let rPr = this.getElementsByTagName(run, 'rPr')[0] || this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:rPr');
+       if (!rPr.parentElement) run.insertBefore(rPr, t);
+       this.enforceTimesNewRoman(rPr);
+    }
+  }
+
+  private appendNewParagraphAfter(idx: number, value: any) {
+    const p = this.paragraphs[idx];
+    if (!p) return;
+    const newP = p.cloneNode(true) as Element;
+    // Clear placeholders
+    const ts = this.getElementsByTagName(newP, 't');
+    if (ts[0]) {
+       ts[0].textContent = String(value);
+       // Clear others
+       for (let i = 1; i < ts.length; i++) ts[i].textContent = '';
+    }
+    p.parentElement?.insertBefore(newP, p.nextSibling);
   }
 
   private enforceTimesNewRoman(rPr: Element) {
@@ -84,53 +188,100 @@ export class DocumentFiller {
 
   private injectIntoParagraph(idx: number, value: any, pattern?: string) {
     const p = this.paragraphs[idx];
-    if (!p || !value) return;
+    if (!p || value === undefined || value === null) return;
 
-    if (pattern) {
-      const textNodes = this.getElementsByTagName(p, 't');
+    const textValue = String(value);
+    const textNodes = this.getElementsByTagName(p, 't');
+    const fullText = textNodes.map(n => n.textContent || '').join('');
+
+    if (pattern && fullText.includes(pattern)) {
+      // Find the specific node containing the pattern part
       for (const t of textNodes) {
         if (t.textContent?.includes(pattern)) {
-          t.textContent = t.textContent.replace(pattern, String(value));
-          
-          // Ensure ancestor rPr has Times New Roman
-          const run = t.parentElement;
-          if (run && run.nodeName.includes('r')) {
-            let rPr = this.getElementsByTagName(run, 'rPr')[0];
-            if (!rPr) {
-              rPr = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:rPr');
-              run.insertBefore(rPr, t);
-            }
-            this.enforceTimesNewRoman(rPr);
-          }
-          break;
+          t.textContent = t.textContent.replace(pattern, textValue);
+          this.applyRunStyle(t.parentElement);
+          return;
+        }
+      }
+      
+      // If pattern is split across text nodes (complex case)
+      let replaced = false;
+      for (const t of textNodes) {
+        if (!replaced && (t.textContent?.includes('.') || t.textContent?.includes('_'))) {
+          t.textContent = fullText.replace(pattern, textValue);
+          this.applyRunStyle(t.parentElement);
+          replaced = true;
+        } else if (replaced && (t.textContent?.includes('.') || t.textContent?.includes('_'))) {
+          t.textContent = '';
         }
       }
     } else {
-      // Full run replacement logic
-      const runs = this.getElementsByTagName(p, 'r');
-      if (runs.length > 0) {
-        const firstRun = runs[0];
-        let rPr = this.getElementsByTagName(firstRun, 'rPr')[0];
-        
-        while (p.firstChild) p.removeChild(p.firstChild);
-        
-        const newRun = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:r');
-        if (!rPr) {
-          rPr = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:rPr');
-        } else {
-          rPr = rPr.cloneNode(true) as Element;
+      // No pattern: Replace entire content while keeping first run's style if possible
+      if (textNodes.length > 0) {
+        textNodes[0].textContent = textValue;
+        this.applyRunStyle(textNodes[0].parentElement);
+        for (let i = 1; i < textNodes.length; i++) {
+          textNodes[i].textContent = '';
         }
-        
-        this.enforceTimesNewRoman(rPr);
-        newRun.appendChild(rPr);
-        
-        const newText = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
-        newText.setAttribute('xml:space', 'preserve');
-        newText.textContent = String(value);
-        newRun.appendChild(newText);
-        p.appendChild(newRun);
+      } else {
+        // Build new run if empty
+        const r = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:r');
+        const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
+        t.setAttribute('xml:space', 'preserve');
+        t.textContent = textValue;
+        r.appendChild(t);
+        p.appendChild(r);
+        this.applyRunStyle(r);
       }
     }
+  }
+
+  private applyRunStyle(run: Element | null | undefined) {
+    if (!run || (run.nodeName !== 'w:r' && run.nodeName !== 'r')) return;
+    let rPr = this.getElementsByTagName(run, 'rPr')[0];
+    if (!rPr) {
+      rPr = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:rPr');
+      run.insertBefore(rPr, run.firstChild);
+    }
+    this.enforceTimesNewRoman(rPr);
+  }
+
+  private replaceParagraphContent(p: Element, value: string) {
+    const runs = this.getElementsByTagName(p, 'r');
+    let rPr: Element | null = null;
+    
+    if (runs.length > 0) {
+      const existingRPr = this.getElementsByTagName(runs[0], 'rPr')[0];
+      if (existingRPr) rPr = existingRPr.cloneNode(true) as Element;
+    }
+
+    while (p.firstChild) p.removeChild(p.firstChild);
+    
+    const newRun = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:r');
+    if (!rPr) rPr = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:rPr');
+    this.enforceTimesNewRoman(rPr);
+    
+    const color = this.getElementsByTagName(rPr, 'color')[0] || this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:color');
+    color.setAttribute('w:val', '000000');
+    if (!color.parentElement) rPr.appendChild(color);
+
+    newRun.appendChild(rPr);
+    
+    // Support multi-line by splitting by \n and adding <w:br/>
+    const lines = value.split('\n');
+    lines.forEach((line, i) => {
+      const newText = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
+      newText.setAttribute('xml:space', 'preserve');
+      newText.textContent = line;
+      newRun.appendChild(newText);
+      
+      if (i < lines.length - 1) {
+        const br = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:br');
+        newRun.appendChild(br);
+      }
+    });
+
+    p.appendChild(newRun);
   }
 
   private injectIntoTable(idx: number, value: any) {
