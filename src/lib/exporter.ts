@@ -75,14 +75,12 @@ export class DocumentFiller {
 
         if (mapping.type === 'paragraph' && mapping.startParagraph !== undefined && mapping.endParagraph !== undefined) {
           this.fillTextSection(mapping.startParagraph, mapping.endParagraph, value, field.originalPattern);
+        } else if (mapping.type === 'table-cell' && mapping.tableIndex !== undefined && mapping.rowIndex !== undefined && mapping.cellIndex !== undefined) {
+          this.injectIntoSpecificCell(mapping.tableIndex, mapping.rowIndex, mapping.cellIndex, value);
         } else if (mapping.type === 'table-cell' && mapping.tableIndex !== undefined) {
-          if (field.semanticRole === 'resource') {
-            this.injectIntoSpecificCell(mapping.tableIndex, mapping.rowIndex!, mapping.cellIndex!, value);
-          } else {
-            this.injectIntoTable(mapping.tableIndex, value);
-          }
+          // Fallback for full table replacement if it was a generic 'table' field
+          this.injectIntoTable(mapping.tableIndex, value);
         } else if (mapping.type === 'paragraph' && mapping.paragraphIndex !== undefined) {
-          // Fallback for single paragraph mapping
           this.injectIntoParagraph(mapping.paragraphIndex, value, field.originalPattern);
         }
       });
@@ -141,23 +139,29 @@ export class DocumentFiller {
     const tc = tcs[cIdx];
     if (!tc) return;
 
-    let t = this.getElementsByTagName(tc, 't')[0];
-    if (!t) {
-       const p = this.getElementsByTagName(tc, 'p')[0] || this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:p');
-       if (!p.parentElement) tc.appendChild(p);
-       const r = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:r');
-       t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
-       r.appendChild(t);
-       p.appendChild(r);
-    }
-    t.textContent = String(value || "");
-    
-    // Style enforcement
-    const run = t.parentElement;
-    if (run) {
-       let rPr = this.getElementsByTagName(run, 'rPr')[0] || this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:rPr');
-       if (!rPr.parentElement) run.insertBefore(rPr, t);
-       this.enforceTimesNewRoman(rPr);
+    const tNodes = this.getElementsByTagName(tc, 't');
+    if (tNodes.length > 0) {
+      // Put text into the first text node found
+      tNodes[0].textContent = String(value || "");
+      // Preserve existing run style by not overriding it if not needed
+      // Clear other text nodes in the cell to avoid duplicates
+      for (let i = 1; i < tNodes.length; i++) {
+        tNodes[i].textContent = "";
+      }
+    } else {
+      // Only create new structure if cell has no text nodes
+      let p = this.getElementsByTagName(tc, 'p')[0];
+      if (!p) {
+        p = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:p');
+        tc.appendChild(p);
+      }
+      const r = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:r');
+      const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
+      t.setAttribute('xml:space', 'preserve');
+      t.textContent = String(value || "");
+      r.appendChild(t);
+      p.appendChild(r);
+      this.applyRunStyle(r);
     }
   }
 
@@ -167,7 +171,7 @@ export class DocumentFiller {
     const newP = p.cloneNode(true) as Element;
     // Clear placeholders
     const ts = this.getElementsByTagName(newP, 't');
-    if (ts[0]) {
+    if (ts.length > 0) {
        ts[0].textContent = String(value);
        // Clear others
        for (let i = 1; i < ts.length; i++) ts[i].textContent = '';
@@ -179,11 +183,11 @@ export class DocumentFiller {
     let rFonts = this.getElementsByTagName(rPr, 'rFonts')[0];
     if (!rFonts) {
       rFonts = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:rFonts');
+      rFonts.setAttribute('w:ascii', 'Times New Roman');
+      rFonts.setAttribute('w:hAnsi', 'Times New Roman');
+      rFonts.setAttribute('w:cs', 'Times New Roman');
       rPr.appendChild(rFonts);
     }
-    rFonts.setAttribute('w:ascii', 'Times New Roman');
-    rFonts.setAttribute('w:hAnsi', 'Times New Roman');
-    rFonts.setAttribute('w:cs', 'Times New Roman');
   }
 
   private injectIntoParagraph(idx: number, value: any, pattern?: string) {
@@ -244,6 +248,22 @@ export class DocumentFiller {
       run.insertBefore(rPr, run.firstChild);
     }
     this.enforceTimesNewRoman(rPr);
+    
+    // Ensure font size if missing (default to 11pt = 22 half-points)
+    let sz = this.getElementsByTagName(rPr, 'sz')[0];
+    if (!sz) {
+      sz = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:sz');
+      sz.setAttribute('w:val', '22');
+      rPr.appendChild(sz);
+    }
+    
+    // Ensure black color
+    let color = this.getElementsByTagName(rPr, 'color')[0];
+    if (!color) {
+      color = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:color');
+      rPr.appendChild(color);
+    }
+    color.setAttribute('w:val', '000000');
   }
 
   private replaceParagraphContent(p: Element, value: string) {
@@ -345,39 +365,7 @@ export class DocumentFiller {
 
       rowData.forEach((cellVal, cIdx) => {
         if (cells[cIdx]) {
-          let t = this.getElementsByTagName(cells[cIdx], 't')[0];
-          
-          if (!t) {
-            // Reconstruct minimal run if missing
-            let p = this.getElementsByTagName(cells[cIdx], 'p')[0];
-            if (!p) {
-              p = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:p');
-              cells[cIdx].appendChild(p);
-            }
-            const r = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:r');
-            t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
-            r.appendChild(t);
-            p.appendChild(r);
-          }
-
-          t.textContent = String(cellVal || "");
-
-          // Force black text color for visibility & Times New Roman
-          const run = t.parentElement;
-          if (run) {
-            let rPr = this.getElementsByTagName(run, 'rPr')[0];
-            if (!rPr) {
-              rPr = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:rPr');
-              run.insertBefore(rPr, t);
-            }
-            let color = this.getElementsByTagName(rPr, 'color')[0];
-            if (!color) {
-              color = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:color');
-              rPr.appendChild(color);
-            }
-            color.setAttribute('w:val', '000000');
-            this.enforceTimesNewRoman(rPr);
-          }
+          this.replaceParagraphContent(cells[cIdx], String(cellVal || ""));
         }
       });
       tbl.appendChild(newRow);

@@ -33,6 +33,38 @@ export default function App() {
     setShowDrafts(true);
   };
 
+  const validateAndExport = () => {
+    if (!appDocument) return;
+
+    // Validation: Check if all editable columns are filled for any row that has at least one entry
+    const allFields = appDocument.sections.flatMap(s => s.fields);
+    const tableFields = allFields.filter(f => f.tableId !== undefined && f.rowId !== undefined);
+
+    const rowGroups: Record<string, typeof tableFields> = {};
+    tableFields.forEach(f => {
+      const key = `t${f.tableId}_r${f.rowId}`;
+      if (!rowGroups[key]) rowGroups[key] = [];
+      rowGroups[key].push(f);
+    });
+
+    for (const [key, fields] of Object.entries(rowGroups)) {
+      const fieldValues = fields.map(f => (formValues[f.id] || '').toString().trim());
+      const filledCount = fieldValues.filter(v => v !== '').length;
+
+      if (filledCount > 0 && filledCount < fields.length) {
+        const rowLabel = fields[0].rowLabel || 'Row';
+        const missingLabels = fields
+          .filter(f => !(formValues[f.id] || '').toString().trim())
+          .map(f => f.label);
+        
+        alert(`Validation Error for "${rowLabel}": Please provide ${missingLabels.join(', ')}.`);
+        return;
+      }
+    }
+
+    exportDocx(appDocument, formValues);
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-[#fafafb]">
       {/* Header */}
@@ -83,7 +115,7 @@ export default function App() {
                   <RotateCcw className="w-4 h-4" />
                 </Button>
                 <Button 
-                   onClick={() => exportDocx(appDocument, formValues)}
+                   onClick={validateAndExport}
                    className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-5 h-11 text-[11px] font-semibold shadow-xl shadow-indigo-100 transition-all border-none"
                 >
                    <Download className="w-4 h-4 mr-2" />

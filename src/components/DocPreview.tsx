@@ -13,37 +13,6 @@ export function DocPreview() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!highlightedFieldId || !containerRef.current) return;
-
-    const findAndScroll = () => {
-      const allTextElements = containerRef.current!.querySelectorAll('p, span, h1, h2, h3, h4, h5, h6, td');
-      
-      const field = document?.sections
-        .flatMap(s => s.fields)
-        .find(f => f.id === highlightedFieldId);
-      
-      if (!field) return;
-
-      const section = document?.sections.find(s => s.id === field.sectionId);
-      const searchTerm = section?.title || field.label;
-
-      for (const el of Array.from(allTextElements)) {
-        const htmlEl = el as HTMLElement;
-        if (htmlEl.textContent?.toLowerCase().includes(searchTerm.toLowerCase())) {
-          htmlEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          htmlEl.classList.add('highlighted-field');
-          setTimeout(() => {
-            htmlEl.classList.remove('highlighted-field');
-          }, 3000);
-          break;
-        }
-      }
-    };
-
-    findAndScroll();
-  }, [highlightedFieldId, document]);
-
-  useEffect(() => {
     if (document?.originalContent && containerRef.current && document.type === 'docx') {
       const renderDoc = async () => {
         try {

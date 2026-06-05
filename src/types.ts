@@ -30,6 +30,10 @@ export interface Field {
   originalPattern?: string; // The pattern detected in the DOCX (e.g. ".....")
   mapping?: FieldMapping;
   semanticRole?: 'resource' | 'procedure' | 'observation' | 'result' | 'interpretation' | 'conclusion';
+  tableId?: number;
+  rowId?: number;
+  colId?: number;
+  rowLabel?: string;
 }
 
 export interface Section {
