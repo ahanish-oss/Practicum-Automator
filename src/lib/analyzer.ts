@@ -127,11 +127,40 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
   let lastSectionHeaderIndex = -1;
 
+  const headerFields: Field[] = [];
+
   structuralElements.forEach((node, index) => {
     if (processedNodeIndices.has(index)) return;
     
     const text = node.textContent?.trim() || '';
     
+    // Standalone Date Field Detection
+    if (node.nodeName === 'w:p') {
+      const dateMatch = text.match(/Date\s*:\s*([.\-_…]{2,})/i);
+      if (dateMatch) {
+          const pIdx = paragraphs.indexOf(node as any);
+          const pattern = dateMatch[1];
+          console.log("DATE FIELD DETECTED", {
+            paragraph: pIdx,
+            text
+          });
+          headerFields.push({
+            id: "date-field", // Use shared ID for multiple date fields to sync values in UI
+            label: "Date",
+            type: "text",
+            sectionId: "document-header",
+            semanticRole: undefined,
+            originalPattern: pattern,
+            mapping: {
+              type: "paragraph",
+              startParagraph: pIdx,
+              endParagraph: pIdx
+            }
+          });
+          return; // Skip further processing for this paragraph
+      }
+    }
+
     // Header Detection & Section Partitioning
     if (node.nodeName === 'w:p') {
       const romanNumeralRegex = /^([IVXLCDM]+)\s+(.+)$/i;
@@ -366,6 +395,17 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
   if (currentSection.fields.length > 0 || currentSection.id !== 'root') {
     sections.push({ ...currentSection, content: currentSection.content.trim() });
+  }
+
+  // Prepend Document Header if global header fields were detected
+  if (headerFields.length > 0) {
+    sections.unshift({
+      id: 'document-header',
+      title: 'Document Header',
+      content: '',
+      fields: headerFields,
+      intent: 'template-static'
+    });
   }
 
   console.log("FINAL SECTIONS", sections.map(s => s.title));
