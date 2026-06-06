@@ -156,38 +156,97 @@ export class DocumentFiller {
     return s;
   }
 
+  private removeLeadingNumbering(text: string): string {
+    // Detects common numbering patterns: 1., 1), a., a), I., i), etc.
+    return text.replace(
+      /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])\s*/i,
+      ''
+    );
+  }
+
   private fillTextSection(startIdx: number, endIdx: number, value: any, pattern?: string, placeholderIdxs?: number[]) {
     const text = this.safeString(value);
-    const lines = text.split('\n');
     
-    console.log(`[DETERMINISTIC EXPORT] Field Range: P[${startIdx}-${endIdx}], Line count: ${lines.length}, Placeholders: ${placeholderIdxs?.length || 0}`);
+    // Parse user content into clean items
+    const rawLines = text.split(/\n/g).map(l => l.trim()).filter(l => !!l);
+    const anyNumbered = rawLines.some(line => /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])\s*/i.test(line));
+    
+    const items: string[] = [];
+    if (!anyNumbered) {
+      // Style B: Every non-empty line is a new item if no numbers are detected anywhere
+      rawLines.forEach(line => items.push(line));
+    } else {
+      // Style A: Numbering detected, group unnumbered lines with the preceding numbered line
+      rawLines.forEach(line => {
+        const hasNumbering = /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])\s*/i.test(line);
+        if (hasNumbering || items.length === 0) {
+          items.push(this.removeLeadingNumbering(line));
+        } else {
+          // Append to previous item if it's a continuation line (doesn't start with a number)
+          items[items.length - 1] += "\n" + line;
+        }
+      });
+    }
 
-    // DETERMINISTIC PATH (Recommended)
+    console.log(`[DETERMINISTIC EXPORT] Field Range: P[${startIdx}-${endIdx}], Item count: ${items.length}, Placeholders: ${placeholderIdxs?.length || 0}`);
+
     if (placeholderIdxs && placeholderIdxs.length > 0) {
       const placeholderElements = placeholderIdxs
         .map(idx => this.paragraphs[idx])
         .filter(p => !!p && !!p.parentElement);
 
       if (placeholderElements.length > 0) {
-        const firstPlaceholder = placeholderElements[0];
-        const parent = firstPlaceholder.parentElement!;
+        // Categorize placeholders: numbered anchors vs pure dots
+        const anchors = placeholderElements.filter(p => {
+           const content = p.textContent || "";
+           return /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])/i.test(content);
+        });
         
-        // Insert new paragraphs at the position of the first placeholder
-        lines.forEach(line => {
-          const newP = firstPlaceholder.cloneNode(true) as Element;
-          this.replaceParagraphContent(newP, line);
-          parent.insertBefore(newP, firstPlaceholder);
+        // If no numbered anchors found, treat the first block as the primary anchor
+        const targetAnchors = anchors.length > 0 ? anchors : [placeholderElements[0]];
+        const continuationDots = placeholderElements.filter(p => !targetAnchors.includes(p));
+
+        console.log({
+          items: items.length,
+          anchors: targetAnchors.length,
+          continuationDots: continuationDots.length
         });
 
-        // Remove all original placeholder paragraphs
-        placeholderElements.forEach(p => {
+        // Map items to anchors
+        let insertionPoint = targetAnchors[targetAnchors.length - 1];
+        items.forEach((item, i) => {
+          if (i < targetAnchors.length) {
+            // Fill existing anchor
+            this.replaceParagraphContent(targetAnchors[i], item);
+          } else {
+            // Append new paragraphs after the LAST injected paragraph to maintain order
+            const newP = insertionPoint.cloneNode(true) as Element;
+            this.replaceParagraphContent(newP, item);
+            insertionPoint.parentElement!.insertBefore(newP, insertionPoint.nextSibling);
+            insertionPoint = newP; // Move the insertion point forward
+          }
+        });
+
+        // CLEAN-UP: Clear any unused anchors or dots
+        if (items.length < targetAnchors.length) {
+          for (let i = items.length; i < targetAnchors.length; i++) {
+            const extraAnchor = targetAnchors[i];
+            if (extraAnchor.parentElement) {
+              console.log("REMOVING UNUSED ANCHOR:", extraAnchor.textContent);
+              extraAnchor.parentElement.removeChild(extraAnchor);
+            }
+          }
+        }
+
+        // Always remove continuation dots in the deterministic path as they clutter the output
+        continuationDots.forEach(p => {
           if (p.parentElement) {
-            console.log("REMOVING PLACEHOLDER:", p.textContent);
+            console.log("REMOVING CONTINUATION DOTS:", p.textContent);
             p.parentElement.removeChild(p);
           }
         });
-        
-        console.log(`DETERMINISTIC REPLACE COMPLETE: Removed ${placeholderElements.length}, Inserted ${lines.length}`);
+
+        console.log(`DETERMINISTIC REPLACE COMPLETE: Filled ${items.length} items.`);
         return;
       }
     }
@@ -345,6 +404,10 @@ export class DocumentFiller {
   private surgicalReplaceInRun(p: Element, oldRun: Element, value: string, pattern?: string) {
     const rTexts = this.getElementsByTagName(oldRun, 't');
     const fullText = rTexts.map(n => n.textContent || '').join('');
+    
+    // Check if the template text or the paragraph as a whole has numbering
+    const hasTemplateNumbering = /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])\s*/i.test(p.textContent || "");
+    
     const newRun = oldRun.cloneNode(true) as Element;
     
     // Clear all existing text nodes and line breaks in the clone to start fresh
@@ -372,9 +435,10 @@ export class DocumentFiller {
        }
 
        lines.forEach((line, i) => {
+          const processedLine = hasTemplateNumbering ? this.removeLeadingNumbering(line) : line;
           const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
           t.setAttribute('xml:space', 'preserve');
-          t.textContent = line;
+          t.textContent = processedLine;
           newRun.appendChild(t);
           if (i < lines.length - 1) {
              newRun.appendChild(this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:br'));
@@ -390,9 +454,10 @@ export class DocumentFiller {
     } else {
        // Total replacement within the run
        lines.forEach((line, i) => {
+          const processedLine = hasTemplateNumbering ? this.removeLeadingNumbering(line) : line;
           const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
           t.setAttribute('xml:space', 'preserve');
-          t.textContent = line;
+          t.textContent = processedLine;
           newRun.appendChild(t);
           if (i < lines.length - 1) {
              newRun.appendChild(this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:br'));
@@ -446,6 +511,10 @@ export class DocumentFiller {
   }
 
   private replaceParagraphContent(p: Element, value: string) {
+    // Detect numbering in template before replacement
+    const templateText = p.textContent || "";
+    const hasTemplateNumbering = /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])\s*/i.test(templateText);
+
     // SECURITY: Ensure p is actually a paragraph node, if not find/create one
     if (p.nodeName !== 'w:p' && p.nodeName !== 'p') {
       const existingP = this.getElementsByTagName(p, 'p')[0];
@@ -483,9 +552,10 @@ export class DocumentFiller {
     
     const lines = value.split('\n');
     lines.forEach((line, i) => {
+      const processedLine = hasTemplateNumbering ? this.removeLeadingNumbering(line) : line;
       const newText = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
       newText.setAttribute('xml:space', 'preserve');
-      newText.textContent = line;
+      newText.textContent = processedLine;
       newRun.appendChild(newText);
       
       if (i < lines.length - 1) {
