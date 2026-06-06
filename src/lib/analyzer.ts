@@ -37,22 +37,84 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     fields: []
   };
 
-  const excludedSections = [
-    'Theory', 'Algorithm', 'Algorithms', 'Practical Significance', 'Safety Precautions',
-    'References', 'Assessment Scheme', 'Competency', 'Outcomes', 'Resources Required',
-    'Suggested Questions'
-  ];
+  const normalizeTitle = (title: string): string => {
+    return title
+      .toLowerCase()
+      .replace(/^([ivxlcdm]+|[0-9]+)[\.\s\-]+/i, '') // Remove roman numerals or numbers at start
+      .replace(/[^\w\s]/g, ' ') // Replace punctuation with space
+      .replace(/\s+/g, ' ') // Collapse spaces
+      .trim();
+  };
 
-  const studentEntrySections = [
-    'Actual Resources Used', 'Actual Procedure Followed', 'Observations',
-    'Results', 'Interpretation of Results', 'Conclusions', 'Student Details',
-    'Faculty Details', 'Problem-wise Algorithm', 'Summary', 'Conclusion', 'Interpretation'
-  ];
+  const getSectionRole = (normalizedTitle: string): Field['semanticRole'] => {
+    const procedureKeywords = [
+      'procedure', 'actual procedure followed', 'methodology', 
+      'steps', 'implementation', 'algorithm'
+    ];
+    const resultsKeywords = [
+      'results', 'result', 'outcome', 'findings', 
+      'observation', 'observations', 'results observations',
+      'results/observations'
+    ];
+    const interpretationKeywords = [
+      'interpretation', 'interpretation of results', 'analysis', 
+      'analysis of results', 'discussion', 'inference', 'evaluation'
+    ];
+    const conclusionKeywords = [
+      'conclusion', 'conclusions', 'summary', 'final remarks', 
+      'remarks', 'learning outcome'
+    ];
+    const resourceKeywords = [
+      'actual resources used', 'actual resources', 'materials used', 
+      'tools used', 'resources used'
+    ];
 
-  const facultyAssessmentSections = [
-    'Marks Obtained', 'Faculty Evaluation', 'Assessment Scheme', 'Performance Indicators',
-    'Faculty Comments'
-  ];
+    if (procedureKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'procedure';
+    if (resultsKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'result';
+    if (interpretationKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'interpretation';
+    if (conclusionKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'conclusion';
+    if (resourceKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'resource';
+    return undefined;
+  };
+
+  const isExcluded = (title: string): boolean => {
+    const normalized = normalizeTitle(title);
+    const keywords = [
+      'theory', 'algorithm', 'practical significance', 'safety precautions',
+      'references', 'suggested reading', 'further reading', 'assessment scheme', 
+      'competency', 'outcomes', 'performance indicators', 'marks obtained',
+      'faculty member', 'minimum underpinning theory', 'suggested resources',
+      'practicum related questions'
+    ];
+    
+    if (normalized.includes('questions') && (normalized.includes('suggested') || normalized.includes('practicum'))) return true;
+    return keywords.some(k => normalized === k || normalized.includes(k));
+  };
+
+  const isFacultyAssessment = (title: string): boolean => {
+    const normalized = normalizeTitle(title);
+    const keywords = ['marks obtained', 'evaluation', 'assessment', 'faculty comments', 'faculty member'];
+    return keywords.some(k => normalized.includes(k)) || normalized.includes('faculty');
+  };
+
+  const isStudentFillableTitle = (title: string): boolean => {
+    const normalized = normalizeTitle(title);
+    const role = getSectionRole(normalized);
+    const keywords = [
+      'to be filled by', 'learner', 'student', 'state the meaning', 
+      'draw conclusions', 'if any'
+    ];
+    return (!!role || keywords.some(k => normalized.includes(k))) && !isExcluded(title);
+  };
+
+  const containsPlaceholder = (text: string): boolean => {
+    // Unicode-aware placeholder detection: supports normal dots, underscores, dashes AND Unicode ellipsis (...)
+    return (
+      /^[\s\.\-_…]+$/.test(text) ||
+      /[.\-_…]{3,}/.test(text) ||
+      /[…]{2,}/.test(text)
+    );
+  };
 
   // Get all structural elements with their context
   const structuralElements = Array.from(body.childNodes).filter(node => 
@@ -69,22 +131,26 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     if (processedNodeIndices.has(index)) return;
     
     const text = node.textContent?.trim() || '';
-    const textLower = text.toLowerCase();
     
     // Header Detection & Section Partitioning
     if (node.nodeName === 'w:p') {
       const romanNumeralRegex = /^([IVXLCDM]+)\s+(.+)$/i;
       const isRomanHeader = romanNumeralRegex.test(text);
+      const normalizedTitle = normalizeTitle(text);
+      
       const isHeader = (
-        studentEntrySections.some(cs => textLower.includes(cs.toLowerCase())) || 
-        excludedSections.some(cs => textLower.includes(cs.toLowerCase())) ||
-        facultyAssessmentSections.some(cs => textLower.includes(cs.toLowerCase())) ||
-        isRomanHeader || 
-        text.includes('To be filled by student')
-      ) && text.length < 150;
+        isStudentFillableTitle(text) || 
+        isExcluded(text) ||
+        isFacultyAssessment(text) ||
+        isRomanHeader
+      ) && text.length < 150 && text.length > 2;
 
       if (isHeader) {
-        console.log("SECTION DETECTED:", text, index);
+        let intent: Section['intent'] = 'template-static';
+        if (isExcluded(text)) intent = 'template-static';
+        else if (isFacultyAssessment(text)) intent = 'faculty-evaluation';
+        else if (isStudentFillableTitle(text)) intent = 'student-fillable';
+
         // Finalize previous section range
         if (currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation') {
           currentSection.fields.forEach(f => {
@@ -98,7 +164,6 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
                 }
               }
               f.mapping.endParagraph = lastPIdx >= 0 ? lastPIdx : paragraphs.indexOf(structuralElements[index] as any) - 1;
-              console.log(`  - Finalized range for ${f.label}: endParagraph=${f.mapping.endParagraph}`);
             }
           });
         }
@@ -106,20 +171,6 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
         if (currentSection.fields.length > 0 || currentSection.id !== 'root') {
           sections.push({ ...currentSection, content: currentSection.content.trim() });
         }
-
-        let intent: Section['intent'] = 'template-static';
-        if (
-          studentEntrySections.some(ss => textLower.includes(ss.toLowerCase())) || 
-          textLower.includes('to be filled by student') ||
-          textLower.includes('to be filled by the students') ||
-          textLower.includes('to be filled by the learners')
-        ) {
-          intent = 'student-fillable';
-        } else if (facultyAssessmentSections.some(fs => textLower.includes(fs.toLowerCase()))) {
-          intent = 'faculty-evaluation';
-        }
-
-        console.log('[SECTION]', text, 'intent:', intent);
 
         currentSection = {
           id: `section-${index}`,
@@ -135,9 +186,10 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
     // Process content within the current section based on its intent
     if (currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation') {
-      const titleLower = currentSection.title.toLowerCase();
+      const normalizedSectionTitle = normalizeTitle(currentSection.title);
+      const role = getSectionRole(normalizedSectionTitle);
       
-      console.log(`ANALYZER: Processing [${node.nodeName}] in section [${currentSection.title}]`);
+      console.log(`ANALYZER: Processing [${node.nodeName}] in section [${currentSection.title}] (Role: ${role})`);
 
       // CASE A: TABLE SECTIONS
       if (node.nodeName === 'w:tbl') {
@@ -150,14 +202,13 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
           
           // Identify label columns (usually first 1 or 2)
           const metadataKeywords = [
-            's.no', 's no', 'serial no', 'sl.no', 'sl no', 'serial number', 
-            'name of resource', 'resource name', 'item name', 'name', 
-            'description', 'particulars', 'item', 'sno', '#', 'no'
+            's.no', 's no', 'serial no', 'serial number', 
+            'sl.no', 'sl no', '#', 'no'
           ];
           
           const labelColIndices = headers.map((h, j) => {
-            const hj = h.toLowerCase();
-            if (metadataKeywords.some(mw => hj === mw || (hj.includes(mw) && hj.length < 20))) return j;
+            const hj = h.toLowerCase().trim();
+            if (metadataKeywords.some(mw => hj === mw || (hj.includes(mw) && hj.length < 5))) return j;
             return -1;
           }).filter(j => j !== -1);
 
@@ -165,8 +216,9 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
           const finalLabelColIndices = labelColIndices.length > 0 ? labelColIndices : [0];
           
           const studentInputKeywords = [
-            'specification', 'version', 'configuration', 'quantity', 'remarks', 
-            'comments', 'observation', 'result', 'output', 'value', 'register', 'student name', 'actual'
+            'name', 'student', 'register', 'roll', 'id', 'version', 
+            'configuration', 'remarks', 'quantity', 'output', 'result', 
+            'observation', 'value', 'actual', 'specification', 'comments'
           ];
 
           const tableRows: NonNullable<Field['tableRows']> = [];
@@ -183,11 +235,20 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
                 const isFillableHeader = studentInputKeywords.some(sk => hl.includes(sk));
                 const isCellBlank = cellText === '';
                 const isMetadata = finalLabelColIndices.includes(cIdx);
+                const isEditable = !isMetadata && (isFillableHeader || isCellBlank);
+                
+                if (rIdx === 0) {
+                  console.log({
+                    header: headerName,
+                    isMetadata,
+                    isEditable: isFillableHeader // Potential to be editable in rows
+                  });
+                }
                 
                 return {
                   text: cellText,
                   columnHeader: headerName,
-                  isEditable: !isMetadata && (isFillableHeader || isCellBlank)
+                  isEditable
                 };
               })
             };
@@ -196,10 +257,10 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
           currentSection.fields.push({
             id: `table_${tableIdx}`,
-            label: currentSection.title.includes('Resources') ? 'Equipment & Softwares' : 'Data Table',
+            label: role === 'resource' ? 'Equipment & Softwares' : 'Data Table',
             type: 'table',
             sectionId: currentSection.id,
-            semanticRole: titleLower.includes('resources') ? 'resource' : undefined,
+            semanticRole: role,
             headers,
             tableRows,
             defaultValue: tableRows.map(row => row.cells.map(cell => cell.text)),
@@ -218,27 +279,25 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
       if (node.nodeName === 'w:p') {
         const pIdx = paragraphs.indexOf(node as any);
         // Improved Placeholder Detection regex per requirements
-        const isPlaceholder = /^\s*[\.\-_]{5,}\s*$/.test(text) || /^\s*\d+[\.\)]\s*[\.\-_]{3,}\s*$/.test(text) || /[\.\-_]{5,}/.test(text);
-        const hasPlaceholder = isPlaceholder;
-        const isDotsOnly = /^[\s\.\-_]+$/.test(text);
+        const hasPlaceholder = containsPlaceholder(text);
+        const isDotsOnly = /^[\s\.\-_…]+$/.test(text);
         const numberingMatch = text.match(/^(\s*\d+[\.\)]|\s*[a-zA-Z][\.\)]|\s*●|\s*-)\s*(.*)$/);
         
-        console.log(`[FIELD DETECTION] Section: ${currentSection.title}, P: ${pIdx}, Text: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}", hasPlaceholder: ${hasPlaceholder}`);
-
-        const role = titleLower.includes('procedure') ? 'procedure' :
-                     titleLower.includes('result') ? 'result' :
-                     titleLower.includes('interpretation') ? 'interpretation' :
-                     titleLower.includes('conclusion') ? 'conclusion' : 
-                     (titleLower.includes('comment') || titleLower.includes('remark')) ? 'interpretation' : 
-                     titleLower.includes('observation') ? 'observation' : undefined;
+        console.log({
+          section: currentSection.title,
+          paragraph: pIdx,
+          text: text.substring(0, 30),
+          containsPlaceholder: hasPlaceholder
+        });
 
         // Check if we are currently finishing a range
         const lastField = currentSection.fields[currentSection.fields.length - 1];
         const isContinuingRange = lastField && lastField.mapping?.type === 'paragraph' && lastField.mapping.endParagraph === undefined;
 
-        // CRITICAL FIX: Any numbering in a student-fillable section starts a NEW field 
-        // to prevent multiple numbered items from being collapsed into one.
-        if (numberingMatch) {
+        // Numbered response area detection: 1. .......
+        const isNumberedPlaceholder = numberingMatch && hasPlaceholder;
+
+        if (isNumberedPlaceholder) {
           if (isContinuingRange && lastField) {
             lastField.mapping!.endParagraph = pIdx - 1;
           }
@@ -249,13 +308,14 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
             type: 'textarea',
             sectionId: currentSection.id,
             semanticRole: (role || 'interpretation') as any,
-            originalPattern: text.match(/[\.\-_]{2,}/)?.[0],
+            originalPattern: text.match(/[.\-_…]{2,}/)?.[0],
             mapping: {
               type: 'paragraph',
               startParagraph: pIdx,
+              placeholderParagraphs: [pIdx]
             }
           });
-          console.log(`ANALYZER: Split detected - New numbered field [${numberingMatch[1].trim()}] at P[${pIdx}]`);
+          console.log(`ANALYZER: Split detected - New numbered placeholder at P[${pIdx}]`);
           return;
         }
 
@@ -268,15 +328,19 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
                type: 'textarea',
                sectionId: currentSection.id,
                semanticRole: (role || 'interpretation') as any,
-               originalPattern: text.match(/[\.\-_]{2,}/)?.[0],
+               originalPattern: text.match(/[.\-_…]{2,}/)?.[0],
                mapping: {
                  type: 'paragraph',
                  startParagraph: pIdx,
+                 placeholderParagraphs: [pIdx]
                }
              });
              console.log(`ANALYZER: New placeholder block started at P[${pIdx}]`);
           } else if (isDotsOnly) {
              // Dotted line continuation - explicitly logging context
+             if (lastField.mapping?.placeholderParagraphs) {
+               lastField.mapping.placeholderParagraphs.push(pIdx);
+             }
              console.log(`ANALYZER: Extending field [${lastField.label}] with dots at P[${pIdx}]`);
           }
         } else if (text !== '' && isContinuingRange) {
@@ -306,39 +370,84 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
   console.log("FINAL SECTIONS", sections.map(s => s.title));
 
-  // Refine and Normalize headers for tables, and implement FALLBACK RULE for learner sections
-  const finalizedSections = sections.filter(s => s.intent === 'student-fillable').map(s => {
-    const titleLower = s.title.toLowerCase();
-    const learnerSections = /procedure|procedures|observation|observations|result|results|interpretation|conclusion|conclusions/i;
+  // Refine sections and only keep those that are truly student-fillable
+  const finalizedSections = sections.filter(s => {
+    const normalizedTitle = normalizeTitle(s.title);
+    const role = getSectionRole(normalizedTitle);
+    const isActuallyExcluded = isExcluded(s.title);
+    const hasFields = s.fields.length > 0;
+    
+    if (isActuallyExcluded) {
+      console.log({
+        title: s.title,
+        normalizedTitle,
+        role,
+        fields: s.fields.length,
+        kept: false,
+        reason: 'Strictly excluded'
+      });
+      return false;
+    }
 
-    console.log(`[SECTION] ${s.title} FIELDS: ${s.fields.length}`);
+    // Keep if we already detected fields (table or paragraph)
+    if (hasFields) {
+      console.log({
+        title: s.title,
+        normalizedTitle,
+        role,
+        fields: s.fields.length,
+        kept: true,
+        reason: 'Already has fields'
+      });
+      return true;
+    }
 
-    // Fallback Rule: Ensure learner sections ALWAYS have at least one field
-    if (learnerSections.test(titleLower) && s.fields.length === 0) {
+    // Check for strong signals of being fillable
+    const hasInstructions = s.title.toLowerCase().includes('to be filled by') || 
+                           s.content.toLowerCase().includes('to be filled by') ||
+                           s.title.toLowerCase().includes('state the meaning') ||
+                           s.title.toLowerCase().includes('draw conclusions');
+                           
+    const hasPlaceholders = s.content.includes('..........') || 
+                           s.content.includes('—————') || 
+                           s.content.includes('_____') ||
+                           s.content.includes('……');
+
+    const shouldKeep = (s.intent === 'student-fillable' || !!role) && (hasInstructions || hasPlaceholders);
+    
+    console.log({
+      title: s.title,
+      normalizedTitle,
+      role,
+      fields: s.fields.length,
+      kept: shouldKeep,
+      reason: shouldKeep ? 'Fillable signals (fallback will apply)' : 'No fillable signals'
+    });
+    
+    return shouldKeep;
+  }).map(s => {
+    const normalized = normalizeTitle(s.title);
+    const role = getSectionRole(normalized);
+
+    // Fallback Rule: Ensure learner sections ALWAYS have at least one field if they passed the filter
+    if (s.fields.length === 0) {
       const headerIdx = parseInt(s.id.split('-')[1]);
       const headerPIdx = paragraphs.indexOf(structuralElements[headerIdx] as any);
       const startPIdx = headerPIdx !== -1 ? headerPIdx + 1 : 0;
 
       console.log(`[ANALYZER] Fallback logic applied for section: ${s.title}, starting at P: ${startPIdx}`);
       
-      const isProcedure = titleLower.includes('procedure');
-      const isResult = titleLower.includes('result');
-      const isInterpretation = titleLower.includes('interpretation');
-      const isConclusion = titleLower.includes('conclusion');
-
       s.fields.push({
         id: `field-fallback-${s.id}`,
         label: s.title,
         type: 'textarea',
         sectionId: s.id,
-        semanticRole: isProcedure ? 'procedure' :
-                      isResult ? 'result' :
-                      isInterpretation ? 'interpretation' :
-                      isConclusion ? 'conclusion' : 'observation',
+        semanticRole: role || 'result',
         mapping: {
           type: 'paragraph',
           startParagraph: startPIdx,
-          endParagraph: startPIdx + 5 // Arbitrary buffer or end of section would be better
+          endParagraph: startPIdx,
+          placeholderParagraphs: [startPIdx]
         }
       });
     }

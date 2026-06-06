@@ -65,7 +65,11 @@ export class DocumentFiller {
         const value = formValues[field.id];
         
         // Log every field value before processing
-        console.log("EXPORT FIELD", field.id, field.label, field.mapping, value);
+        console.log("================================");
+        console.log("FIELD:", field.label);
+        console.log("VALUE:", value);
+        console.log("MAPPING:", JSON.stringify(field.mapping, null, 2));
+        console.log("================================");
         
         if (!field.mapping || value === undefined || value === null) {
           console.log(`[SKIP FIELD] ${field.id}: No mapping or value`);
@@ -89,14 +93,20 @@ export class DocumentFiller {
         });
 
         try {
-          if (mapping.type === 'paragraph' && mapping.startParagraph !== undefined && mapping.endParagraph !== undefined) {
-            this.fillTextSection(mapping.startParagraph, mapping.endParagraph, value, field.originalPattern);
+          if (mapping.type === 'paragraph') {
+            const start = mapping.startParagraph ?? mapping.paragraphIndex;
+            const end = mapping.endParagraph ?? mapping.startParagraph ?? mapping.paragraphIndex;
+            
+            if (start !== undefined) {
+              console.log(`[CALL] fillTextSection range [${start}-${end}] for ${field.label}`);
+              this.fillTextSection(start, end, value, field.originalPattern, mapping.placeholderParagraphs);
+            } else {
+              console.warn(`[SKIP FIELD] ${field.id}: Paragraph mapping has no index`, mapping);
+            }
           } else if (mapping.type === 'table-cell' && mapping.tableIndex !== undefined && mapping.rowIndex !== undefined && mapping.cellIndex !== undefined) {
             this.injectIntoSpecificCell(mapping.tableIndex, mapping.rowIndex, mapping.cellIndex, value);
           } else if (mapping.type === 'table-cell' && mapping.tableIndex !== undefined) {
             this.injectIntoTable(mapping.tableIndex, value);
-          } else if (mapping.type === 'paragraph' && mapping.paragraphIndex !== undefined) {
-            this.injectIntoParagraph(mapping.paragraphIndex, value, field.originalPattern);
           }
         } catch (err) {
           console.error(`[FIELD EXPORT ERROR] Failed to inject field ${field.id}:`, err);
@@ -119,11 +129,11 @@ export class DocumentFiller {
        console.error("CRITICAL ERROR: Generated document contains serialized '[object Object]' strings!");
     }
 
-    const unreplacedMatch = finalXml.match(/[\.]{5,}|[_]{5,}/);
+    const unreplacedMatch = finalXml.match(/[.]{5,}|[_]{5,}|[…]{3,}/);
     if (unreplacedMatch) {
        console.error("EXPORT WARNING: Unreplaced placeholders detected.", unreplacedMatch[0]);
        this.paragraphs.forEach((p, i) => {
-          if (/[\.]{5,}|[_]{5,}/.test(p.textContent || "")) {
+          if (/[.]{5,}|[_]{5,}|[…]{3,}/.test(p.textContent || "")) {
              // console.warn(`UNREPLACED_PLACEHOLDER_FOUND at P[${i}]`);
           }
        });
@@ -146,15 +156,48 @@ export class DocumentFiller {
     return s;
   }
 
-  private fillTextSection(startIdx: number, endIdx: number, value: any, pattern?: string) {
+  private fillTextSection(startIdx: number, endIdx: number, value: any, pattern?: string, placeholderIdxs?: number[]) {
     const text = this.safeString(value);
+    const lines = text.split('\n');
     
-    console.log(`[PLACEHOLDER REPLACED] Range: P[${startIdx}-${endIdx}], Value: ${text.substring(0, 30)}...`);
+    console.log(`[DETERMINISTIC EXPORT] Field Range: P[${startIdx}-${endIdx}], Line count: ${lines.length}, Placeholders: ${placeholderIdxs?.length || 0}`);
 
-    // Identification regex for placeholders - more inclusive to match analyzer
-    const placeholderRegex = /[\.\-_]{5,}/;
+    // DETERMINISTIC PATH (Recommended)
+    if (placeholderIdxs && placeholderIdxs.length > 0) {
+      const placeholderElements = placeholderIdxs
+        .map(idx => this.paragraphs[idx])
+        .filter(p => !!p && !!p.parentElement);
+
+      if (placeholderElements.length > 0) {
+        const firstPlaceholder = placeholderElements[0];
+        const parent = firstPlaceholder.parentElement!;
+        
+        // Insert new paragraphs at the position of the first placeholder
+        lines.forEach(line => {
+          const newP = firstPlaceholder.cloneNode(true) as Element;
+          this.replaceParagraphContent(newP, line);
+          parent.insertBefore(newP, firstPlaceholder);
+        });
+
+        // Remove all original placeholder paragraphs
+        placeholderElements.forEach(p => {
+          if (p.parentElement) {
+            console.log("REMOVING PLACEHOLDER:", p.textContent);
+            p.parentElement.removeChild(p);
+          }
+        });
+        
+        console.log(`DETERMINISTIC REPLACE COMPLETE: Removed ${placeholderElements.length}, Inserted ${lines.length}`);
+        return;
+      }
+    }
+
+    // FALLBACK PATH (Heuristic discovery)
+    // Identification regex for placeholders
+    const placeholderRegex = /[.\-_…]{3,}/;
+    const cleanupPattern = /^[.\-_…·•\s]*$/;
     
-    // Find the primary target paragraph
+    // Find the primary target paragraph (anchor)
     let targetIdx = -1;
     for (let i = startIdx; i <= endIdx; i++) {
       const p = this.paragraphs[i];
@@ -166,25 +209,27 @@ export class DocumentFiller {
       }
     }
 
-    if (targetIdx === -1) targetIdx = startIdx;
+    if (targetIdx === -1) {
+       console.warn("No placeholder found in heuristic range", startIdx, endIdx);
+       return;
+    }
 
     const targetP = this.paragraphs[targetIdx];
     if (targetP) {
       const pText = targetP.textContent || "";
-      const dotsPattern = pText.match(/[\.\-_]{3,}/)?.[0] || pattern;
+      const dotsPattern = pText.match(/[.\-_…]{3,}/)?.[0] || pattern;
       this.injectIntoParagraph(targetIdx, text, dotsPattern);
     }
 
-    // CLEANUP PASS: Remove ALL other residual placeholder paragraphs in the range
+    // CLEANUP PASS: Remove ALL residual placeholder paragraphs in the range
     for (let i = startIdx; i <= endIdx; i++) {
       if (i === targetIdx) continue;
       const p = this.paragraphs[i];
       if (!p || !p.parentElement) continue;
 
       const content = (p.textContent || "").trim();
-      // If it's purely dots/underscores/numbering+dots - it's a residual placeholder
-      if (/^(\s*\d+[\.\)]\s*)?[\.\-_]{3,}\s*$/.test(content) || /^[\s\.\-_]*$/.test(content)) {
-        console.log(`FILLER: Cleaning up residual placeholder paragraph at P[${i}]`);
+      if (cleanupPattern.test(content)) {
+        console.log("REMOVING PLACEHOLDER (HEURISTIC):", content);
         p.parentElement.removeChild(p);
       }
     }
@@ -246,6 +291,7 @@ export class DocumentFiller {
   }
 
   private injectIntoParagraph(idx: number, value: any, pattern?: string) {
+    console.log(`[CALL] injectIntoParagraph index ${idx} for value: ${this.safeString(value).substring(0, 20)}...`);
     const p = this.paragraphs[idx];
     if (!p || value === undefined || value === null) return;
 
@@ -267,7 +313,7 @@ export class DocumentFiller {
 
     for (const r of runs) {
        const rText = this.getElementsByTagName(r, 't').map(n => n.textContent || '').join('');
-       const dotsMatch = rText.match(/[\.\-_]{3,}/);
+       const dotsMatch = rText.match(/[.\-_…]{3,}/);
        if ((effectivePattern && rText.includes(effectivePattern)) || dotsMatch) {
           targetRun = r;
           if (!effectivePattern && dotsMatch) effectivePattern = dotsMatch[0];
@@ -284,10 +330,11 @@ export class DocumentFiller {
     // 4. Aggressively cleanup ANY other runs in the same paragraph that contain placeholders
     const remainingRunsAfterReplacement = this.getElementsByTagName(p, 'r');
     remainingRunsAfterReplacement.forEach(r => {
+       if (r === targetRun) return; // Don't wipe the one we just filled
        const ts = this.getElementsByTagName(r, 't');
        ts.forEach(t => {
-          if (t.textContent && /[\.\-_]{3,}/.test(t.textContent)) {
-             t.textContent = t.textContent.replace(/[\.\-_]{3,}/g, '');
+          if (t.textContent && /[.\-_…]{3,}/.test(t.textContent)) {
+             t.textContent = t.textContent.replace(/[.\-_…]{3,}/g, '');
           }
        });
     });

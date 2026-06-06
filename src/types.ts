@@ -10,6 +10,7 @@ export interface FieldMapping {
   paragraphIndex?: number;
   startParagraph?: number;
   endParagraph?: number;
+  placeholderParagraphs?: number[];
   tableIndex?: number;
   rowIndex?: number;
   cellIndex?: number;
