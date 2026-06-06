@@ -10,26 +10,10 @@ import {
   Circle,
   Plus, 
   ChevronDown,
-  Monitor,
-  Code2,
-  Library,
   Box,
-  Cpu,
-  Terminal,
   Layers
 } from 'lucide-react';
 import { useState } from 'react';
-
-const getResourceIcon = (label: string) => {
-  const l = label.toLowerCase();
-  if (l.includes('operating')) return <Monitor className="w-4 h-4" />;
-  if (l.includes('language')) return <Code2 className="w-4 h-4" />;
-  if (l.includes('library')) return <Library className="w-4 h-4" />;
-  if (l.includes('software')) return <Layers className="w-4 h-4" />;
-  if (l.includes('hardware')) return <Cpu className="w-4 h-4" />;
-  if (l.includes('simulation')) return <Terminal className="w-4 h-4" />;
-  return <Box className="w-4 h-4" />;
-};
 
 export function DynamicForm() {
   const { document, formValues, updateFormValue, setHighlightedField } = useStore();
@@ -42,9 +26,84 @@ export function DynamicForm() {
     setActiveSection(document.sections[0].id);
   }
 
+  const renderTableField = (field: any) => {
+    const value = (formValues[field.id] as string[][]) || [];
+    const tableRows = field.tableRows || [];
+    const headers = field.headers || [];
+
+    const updateCell = (rIdx: number, cIdx: number, val: string) => {
+      const newData = [...value];
+      if (!newData[rIdx]) {
+        // Initialize the row if it doesn't exist in formValues
+        newData[rIdx] = tableRows[rIdx].cells.map((c: any) => c.text);
+      }
+      newData[rIdx] = [...newData[rIdx]];
+      newData[rIdx][cIdx] = val;
+      updateFormValue(field.id, newData);
+    };
+
+    return (
+      <div key={field.id} className="space-y-4 overflow-hidden">
+        <div className="flex items-center gap-2 px-1">
+          <TableIcon className="w-3.5 h-3.5 text-indigo-400" />
+          <Label className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">{field.label}</Label>
+        </div>
+        
+        <div className="border border-gray-100 rounded-2xl overflow-x-auto bg-white shadow-sm">
+          <table className="w-full border-collapse text-[12px]">
+            <thead>
+              <tr className="bg-gray-50/50">
+                {headers.map((header: string, i: number) => (
+                  <th key={i} className="px-4 py-3 text-left font-bold text-gray-500 border-b border-gray-100 first:pl-6">
+                    {header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {tableRows.map((row: any, rIdx: number) => {
+                if (row.isHeader) return null;
+                
+                return (
+                  <tr key={rIdx} className="hover:bg-gray-50/30 transition-colors group">
+                    {row.cells.map((cell: any, cIdx: number) => {
+                      const cellValue = value[rIdx]?.[cIdx] ?? cell.text;
+                      const isEditable = cell.isEditable;
+                      
+                      return (
+                        <td key={cIdx} className="py-2 border-b border-gray-50 first:pl-6 last:pr-6 whitespace-nowrap">
+                          {isEditable ? (
+                            <input 
+                              className="w-full bg-gray-50/50 border border-transparent rounded-lg px-3 py-2 text-[12px] font-medium text-gray-900 focus:bg-white focus:border-indigo-100 focus:ring-4 focus:ring-indigo-50 transition-all outline-none placeholder:text-gray-300"
+                              value={cellValue}
+                              onChange={(e) => updateCell(rIdx, cIdx, e.target.value)}
+                              placeholder="..."
+                            />
+                          ) : (
+                            <div className="px-3 py-2 text-gray-500 font-medium">
+                              {cellValue}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
   const renderField = (field: any) => {
     const value = formValues[field.id];
     
+    if (field.type === 'table') {
+      return renderTableField(field);
+    }
+
     // 1. STEPPED LISTS (Procedure/Results)
     if (field.semanticRole === 'procedure' || field.semanticRole === 'result' || field.type === 'procedure-steps') {
        const items = (value as string[]) || ['', ''];
@@ -114,71 +173,6 @@ export function DynamicForm() {
     );
   };
 
-  const renderTableRow = (group: any) => {
-    return (
-      <div key={group.groupKey} className="group relative">
-        <div className="flex flex-col gap-4 p-5 bg-white border border-gray-100 rounded-2xl hover:border-indigo-100 transition-all hover:shadow-sm">
-          <div className="flex items-center gap-3 border-b border-gray-50 pb-3">
-            <div className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-400 group-focus-within:bg-indigo-50 group-focus-within:text-indigo-600 transition-colors">
-              {getResourceIcon(group.rowLabel)}
-            </div>
-            <div className="flex-1">
-              <span className="text-[10px] font-bold text-gray-400 tracking-widest uppercase">Source Row</span>
-              <h4 className="text-[13px] font-bold text-gray-900">{group.rowLabel}</h4>
-            </div>
-            {group.fields.every((f: any) => formValues[f.id]) && (
-              <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="flex-none">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-              </motion.div>
-            )}
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {group.fields.map((field: any) => (
-              <div key={field.id} className="flex flex-col gap-1.5">
-                <Label className="text-[10px] font-semibold text-gray-400 uppercase tracking-tight">
-                  {field.label}
-                </Label>
-                <input 
-                  placeholder={`Enter ${field.label.toLowerCase()}...`}
-                  className="w-full bg-gray-50/50 border border-transparent rounded-xl px-3 py-2 text-[12px] font-medium text-gray-900 focus:bg-white focus:border-indigo-100 focus:ring-4 focus:ring-indigo-50 transition-all outline-none placeholder:text-gray-300"
-                  value={(formValues[field.id] as string) || ''}
-                  onChange={(e) => updateFormValue(field.id, e.target.value)}
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const groupFields = (fields: any[]) => {
-    const groups: any[] = [];
-    let currentTableGroup: any = null;
-
-    fields.forEach(field => {
-      if (field.tableId !== undefined && field.rowId !== undefined) {
-        const groupKey = `t${field.tableId}_r${field.rowId}`;
-        if (!currentTableGroup || currentTableGroup.groupKey !== groupKey) {
-          currentTableGroup = {
-            type: 'table-row',
-            groupKey,
-            rowLabel: field.rowLabel,
-            semanticRole: field.semanticRole,
-            fields: []
-          };
-          groups.push(currentTableGroup);
-        }
-        currentTableGroup.fields.push(field);
-      } else {
-        groups.push({ type: 'single', field });
-        currentTableGroup = null;
-      }
-    });
-    return groups;
-  };
-
   return (
     <div className="space-y-4">
       {document.sections.map((section: Section, sIdx: number) => {
@@ -190,8 +184,6 @@ export function DynamicForm() {
         }).length;
         const totalFields = section.fields.length;
         const isCompleted = totalFields > 0 && filledFields === totalFields;
-
-        const groupedContent = groupFields(section.fields);
 
         return (
           <div 
@@ -247,9 +239,7 @@ export function DynamicForm() {
                     </div>
 
                     <div className="grid gap-8">
-                       {groupedContent.map((group) => 
-                         group.type === 'table-row' ? renderTableRow(group) : renderField(group.field)
-                       )}
+                       {section.fields.map((field) => renderField(field))}
                        {section.fields.length === 0 && (
                          <div className="p-8 bg-gray-50/20 rounded-2xl border border-dashed border-gray-100 text-center space-y-3">
                            <Layers className="w-6 h-6 text-gray-200 mx-auto" />

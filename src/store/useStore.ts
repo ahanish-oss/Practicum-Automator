@@ -17,7 +17,17 @@ export const useStore = create<AppState>()(
       isDarkMode: false,
       highlightedFieldId: null,
 
-      setDocument: (doc) => set({ document: doc, formValues: {} }),
+      setDocument: (doc) => {
+        const initialValues: Record<string, any> = {};
+        doc?.sections.forEach(section => {
+          section.fields.forEach(field => {
+            if (field.defaultValue !== undefined) {
+              initialValues[field.id] = field.defaultValue;
+            }
+          });
+        });
+        set({ document: doc, formValues: initialValues });
+      },
       setHighlightedField: (id) => set({ highlightedFieldId: id }),
       updateFormValue: (fieldId, value) => 
         set((state) => {

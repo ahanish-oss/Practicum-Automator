@@ -23,7 +23,7 @@ export interface Field {
   type: FieldType;
   placeholder?: string;
   sectionId: string;
-  defaultValue?: string;
+  defaultValue?: string | any[];
   rows?: number; 
   headers?: string[]; // for table headers
   isDynamic?: boolean; // Can user add more rows?
@@ -34,6 +34,14 @@ export interface Field {
   rowId?: number;
   colId?: number;
   rowLabel?: string;
+  tableRows?: {
+    isHeader?: boolean;
+    cells: {
+      text: string;
+      isEditable: boolean;
+      columnHeader: string;
+    }[];
+  }[];
 }
 
 export interface Section {

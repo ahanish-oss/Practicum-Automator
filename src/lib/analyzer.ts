@@ -46,7 +46,7 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
   const studentEntrySections = [
     'Actual Resources Used', 'Actual Procedure Followed', 'Observations',
     'Results', 'Interpretation of Results', 'Conclusions', 'Student Details',
-    'Faculty Details', 'Problem-wise Algorithm', 'Summary'
+    'Faculty Details', 'Problem-wise Algorithm', 'Summary', 'Conclusion', 'Interpretation'
   ];
 
   const facultyAssessmentSections = [
@@ -73,15 +73,18 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     
     // Header Detection & Section Partitioning
     if (node.nodeName === 'w:p') {
+      const romanNumeralRegex = /^([IVXLCDM]+)\s+(.+)$/i;
+      const isRomanHeader = romanNumeralRegex.test(text);
       const isHeader = (
         studentEntrySections.some(cs => textLower.includes(cs.toLowerCase())) || 
         excludedSections.some(cs => textLower.includes(cs.toLowerCase())) ||
         facultyAssessmentSections.some(cs => textLower.includes(cs.toLowerCase())) ||
-        /^[VIX]+\.\s/.test(text) || 
+        isRomanHeader || 
         text.includes('To be filled by student')
       ) && text.length < 150;
 
       if (isHeader) {
+        console.log("SECTION DETECTED:", text, index);
         // Finalize previous section range
         if (currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation') {
           currentSection.fields.forEach(f => {
@@ -105,11 +108,18 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
         }
 
         let intent: Section['intent'] = 'template-static';
-        if (studentEntrySections.some(ss => textLower.includes(ss.toLowerCase())) || textLower.includes('to be filled by student')) {
+        if (
+          studentEntrySections.some(ss => textLower.includes(ss.toLowerCase())) || 
+          textLower.includes('to be filled by student') ||
+          textLower.includes('to be filled by the students') ||
+          textLower.includes('to be filled by the learners')
+        ) {
           intent = 'student-fillable';
         } else if (facultyAssessmentSections.some(fs => textLower.includes(fs.toLowerCase()))) {
           intent = 'faculty-evaluation';
         }
+
+        console.log('[SECTION]', text, 'intent:', intent);
 
         currentSection = {
           id: `section-${index}`,
@@ -159,55 +169,47 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
             'comments', 'observation', 'result', 'output', 'value', 'register', 'student name', 'actual'
           ];
 
+          const tableRows: NonNullable<Field['tableRows']> = [];
+
           trs.forEach((tr, rIdx) => {
-            if (rIdx === 0) return; // Skip header row
-            
             const cells = getElementsByTagName(tr, 'tc');
-            
-            // Detect editable columns for this row
-            const editableForThisRow: number[] = [];
-            headers.forEach((h, cIdx) => {
-              if (finalLabelColIndices.includes(cIdx)) return; // Skip columns identified as metadata labels
-              
-              const hl = h.toLowerCase();
-              const cellText = cells[cIdx]?.textContent?.trim() || '';
-              
-              const isFillableHeader = studentInputKeywords.some(sk => hl.includes(sk));
-              const isCellBlank = cellText === '';
-              
-              // Only create field if it's explicitly a fillable header OR if the template cell is empty
-              if (isFillableHeader || isCellBlank) {
-                editableForThisRow.push(cIdx);
-              }
-            });
-
-            const rowLabelParts = finalLabelColIndices.map(i => cells[i]?.textContent?.trim()).filter(Boolean);
-            const rowLabel = rowLabelParts.join(' - ') || `Row ${rIdx}`;
-            
-            // Skip rows that don't have a meaningful label (might be empty rows at the end)
-            if (!rowLabel || rowLabel === '-') return;
-
-            editableForThisRow.forEach(cIdx => {
-              const headerName = headers[cIdx] || `Column ${cIdx + 1}`;
-              currentSection.fields.push({
-                id: `table_${tableIdx}_row_${rIdx}_col_${cIdx}`,
-                label: headerName,
-                type: 'text',
-                sectionId: currentSection.id,
-                semanticRole: titleLower.includes('resources') ? 'resource' : undefined,
-                tableId: tableIdx,
-                rowId: rIdx,
-                colId: cIdx,
-                rowLabel: rowLabel,
-                mapping: { 
-                  type: 'table-cell', 
-                  tableIndex: tableIdx, 
-                  rowIndex: rIdx, 
-                  cellIndex: cIdx 
-                }
-              });
-            });
+            const row: typeof tableRows[0] = {
+              isHeader: rIdx === 0,
+              cells: cells.map((cell, cIdx) => {
+                const headerName = headers[cIdx] || `Column ${cIdx + 1}`;
+                const hl = headerName.toLowerCase();
+                const cellText = cell.textContent?.trim() || '';
+                
+                const isFillableHeader = studentInputKeywords.some(sk => hl.includes(sk));
+                const isCellBlank = cellText === '';
+                const isMetadata = finalLabelColIndices.includes(cIdx);
+                
+                return {
+                  text: cellText,
+                  columnHeader: headerName,
+                  isEditable: !isMetadata && (isFillableHeader || isCellBlank)
+                };
+              })
+            };
+            tableRows.push(row);
           });
+
+          currentSection.fields.push({
+            id: `table_${tableIdx}`,
+            label: currentSection.title.includes('Resources') ? 'Equipment & Softwares' : 'Data Table',
+            type: 'table',
+            sectionId: currentSection.id,
+            semanticRole: titleLower.includes('resources') ? 'resource' : undefined,
+            headers,
+            tableRows,
+            defaultValue: tableRows.map(row => row.cells.map(cell => cell.text)),
+            mapping: { 
+              type: 'table-cell', 
+              tableIndex: tableIdx 
+            }
+          });
+
+          console.log(`ANALYZER: Added table field table_${tableIdx} with ${tableRows.length} rows`);
         }
         return;
       }
@@ -215,36 +217,74 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
       // CASE B: PARAGRAPH SECTIONS (Procedure, Results, Conclusion, Interpretation, Comments)
       if (node.nodeName === 'w:p') {
         const pIdx = paragraphs.indexOf(node as any);
-        const hasPlaceholder = /\.{2,}|_{2,}/.test(text); // More forgiving: 2 dots
+        // Improved Placeholder Detection regex per requirements
+        const isPlaceholder = /^\s*[\.\-_]{5,}\s*$/.test(text) || /^\s*\d+[\.\)]\s*[\.\-_]{3,}\s*$/.test(text) || /[\.\-_]{5,}/.test(text);
+        const hasPlaceholder = isPlaceholder;
+        const isDotsOnly = /^[\s\.\-_]+$/.test(text);
+        const numberingMatch = text.match(/^(\s*\d+[\.\)]|\s*[a-zA-Z][\.\)]|\s*●|\s*-)\s*(.*)$/);
         
+        console.log(`[FIELD DETECTION] Section: ${currentSection.title}, P: ${pIdx}, Text: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}", hasPlaceholder: ${hasPlaceholder}`);
+
         const role = titleLower.includes('procedure') ? 'procedure' :
                      titleLower.includes('result') ? 'result' :
                      titleLower.includes('interpretation') ? 'interpretation' :
                      titleLower.includes('conclusion') ? 'conclusion' : 
-                     (titleLower.includes('comment') || titleLower.includes('remark')) ? 'interpretation' : undefined;
+                     (titleLower.includes('comment') || titleLower.includes('remark')) ? 'interpretation' : 
+                     titleLower.includes('observation') ? 'observation' : undefined;
 
-        // If we found a placeholder and we don't have a paragraph field for this section yet, create one
-        const existingTextField = currentSection.fields.find(f => f.mapping?.type === 'paragraph');
-        
-        // Auto-detect if it's a known semantic section even without dots
-        const shouldAutoDetect = role !== undefined && !existingTextField && text.length < 50;
+        // Check if we are currently finishing a range
+        const lastField = currentSection.fields[currentSection.fields.length - 1];
+        const isContinuingRange = lastField && lastField.mapping?.type === 'paragraph' && lastField.mapping.endParagraph === undefined;
 
-        if ((hasPlaceholder || shouldAutoDetect) && !existingTextField) {
-          console.log(`    - Creating range-based text field for section ${currentSection.title} (Role: ${role})`);
+        // CRITICAL FIX: Any numbering in a student-fillable section starts a NEW field 
+        // to prevent multiple numbered items from being collapsed into one.
+        if (numberingMatch) {
+          if (isContinuingRange && lastField) {
+            lastField.mapping!.endParagraph = pIdx - 1;
+          }
+
           currentSection.fields.push({
-            id: `text-${pIdx}`,
-            label: currentSection.title,
+            id: `para-${pIdx}`,
+            label: `${currentSection.title} (${numberingMatch[1].trim()})`,
             type: 'textarea',
             sectionId: currentSection.id,
             semanticRole: (role || 'interpretation') as any,
-            originalPattern: text.match(/\.{2,}|_{2,}/)?.[0],
+            originalPattern: text.match(/[\.\-_]{2,}/)?.[0],
             mapping: {
               type: 'paragraph',
               startParagraph: pIdx,
             }
           });
+          console.log(`ANALYZER: Split detected - New numbered field [${numberingMatch[1].trim()}] at P[${pIdx}]`);
           return;
         }
+
+        if (hasPlaceholder) {
+          if (!isContinuingRange) {
+             // New standalone dots field
+             currentSection.fields.push({
+               id: `para-${pIdx}`,
+               label: currentSection.title,
+               type: 'textarea',
+               sectionId: currentSection.id,
+               semanticRole: (role || 'interpretation') as any,
+               originalPattern: text.match(/[\.\-_]{2,}/)?.[0],
+               mapping: {
+                 type: 'paragraph',
+                 startParagraph: pIdx,
+               }
+             });
+             console.log(`ANALYZER: New placeholder block started at P[${pIdx}]`);
+          } else if (isDotsOnly) {
+             // Dotted line continuation - explicitly logging context
+             console.log(`ANALYZER: Extending field [${lastField.label}] with dots at P[${pIdx}]`);
+          }
+        } else if (text !== '' && isContinuingRange) {
+          // Non-empty, non-placeholder text ends the current block
+          lastField.mapping!.endParagraph = pIdx - 1;
+          console.log(`ANALYZER: Finalized field [${lastField.label}] at P[${pIdx-1}] due to static text`);
+        }
+        return;
       }
     }
     
@@ -253,18 +293,56 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
   // Final range check for the very last section
   if (currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation') {
-    const textFields = currentSection.fields.filter(f => f.mapping?.type === 'paragraph');
-    if (textFields.length === 1 && textFields[0].mapping && textFields[0].mapping.endParagraph === undefined) {
-      textFields[0].mapping.endParagraph = paragraphs.length - 1;
-    }
+    currentSection.fields.forEach(f => {
+      if (f.mapping?.type === 'paragraph' && f.mapping.endParagraph === undefined) {
+        f.mapping.endParagraph = paragraphs.length - 1;
+      }
+    });
   }
 
   if (currentSection.fields.length > 0 || currentSection.id !== 'root') {
     sections.push({ ...currentSection, content: currentSection.content.trim() });
   }
 
-  // Refine and Normalize headers for tables
+  console.log("FINAL SECTIONS", sections.map(s => s.title));
+
+  // Refine and Normalize headers for tables, and implement FALLBACK RULE for learner sections
   const finalizedSections = sections.filter(s => s.intent === 'student-fillable').map(s => {
+    const titleLower = s.title.toLowerCase();
+    const learnerSections = /procedure|procedures|observation|observations|result|results|interpretation|conclusion|conclusions/i;
+
+    console.log(`[SECTION] ${s.title} FIELDS: ${s.fields.length}`);
+
+    // Fallback Rule: Ensure learner sections ALWAYS have at least one field
+    if (learnerSections.test(titleLower) && s.fields.length === 0) {
+      const headerIdx = parseInt(s.id.split('-')[1]);
+      const headerPIdx = paragraphs.indexOf(structuralElements[headerIdx] as any);
+      const startPIdx = headerPIdx !== -1 ? headerPIdx + 1 : 0;
+
+      console.log(`[ANALYZER] Fallback logic applied for section: ${s.title}, starting at P: ${startPIdx}`);
+      
+      const isProcedure = titleLower.includes('procedure');
+      const isResult = titleLower.includes('result');
+      const isInterpretation = titleLower.includes('interpretation');
+      const isConclusion = titleLower.includes('conclusion');
+
+      s.fields.push({
+        id: `field-fallback-${s.id}`,
+        label: s.title,
+        type: 'textarea',
+        sectionId: s.id,
+        semanticRole: isProcedure ? 'procedure' :
+                      isResult ? 'result' :
+                      isInterpretation ? 'interpretation' :
+                      isConclusion ? 'conclusion' : 'observation',
+        mapping: {
+          type: 'paragraph',
+          startParagraph: startPIdx,
+          endParagraph: startPIdx + 5 // Arbitrary buffer or end of section would be better
+        }
+      });
+    }
+
     s.fields = s.fields.map(f => {
       if (f.type === 'table') {
         const tableIdx = f.mapping?.tableIndex;

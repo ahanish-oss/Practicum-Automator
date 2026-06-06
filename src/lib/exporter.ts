@@ -55,77 +55,138 @@ export class DocumentFiller {
   fill(docData: DocumentData, formValues: Record<string, any>) {
     if (!this.xmlDoc) throw new Error("Filler not loaded");
 
+    const initialPCount = this.paragraphs.length;
     console.log("--- EXPORTER: STARTING SECTION MAPPING VALIDATION ---");
     const mappingsSummary: any[] = [];
 
     docData.sections.forEach(section => {
+      console.log("FIELD COUNT", section.title, section.fields.length);
       section.fields.forEach(field => {
         const value = formValues[field.id];
-        if (!field.mapping || value === undefined || value === null) return;
+        
+        // Log every field value before processing
+        console.log("EXPORT FIELD", field.id, field.label, field.mapping, value);
+        
+        if (!field.mapping || value === undefined || value === null) {
+          console.log(`[SKIP FIELD] ${field.id}: No mapping or value`);
+          return;
+        }
+
+        // Validate values against dangerous types
+        if (typeof value === 'object' && !Array.isArray(value)) {
+            console.warn(`[VALIDATE WARNING] Field ${field.id} has object value. Possible corruption risk:`, value);
+        }
 
         const mapping = field.mapping;
+        const safeVal = this.safeString(value);
         
         mappingsSummary.push({
           section: section.title,
           field: field.label,
           role: field.semanticRole,
           target: mapping.startParagraph !== undefined ? `P:${mapping.startParagraph}-${mapping.endParagraph}` : `T:${mapping.tableIndex}`,
-          value: Array.isArray(value) ? `${value.length} items` : (String(value).substring(0, 30) + '...')
+          value: Array.isArray(value) ? `${value.length} items` : (safeVal.substring(0, 30) + (safeVal.length > 30 ? '...' : ''))
         });
 
-        if (mapping.type === 'paragraph' && mapping.startParagraph !== undefined && mapping.endParagraph !== undefined) {
-          this.fillTextSection(mapping.startParagraph, mapping.endParagraph, value, field.originalPattern);
-        } else if (mapping.type === 'table-cell' && mapping.tableIndex !== undefined && mapping.rowIndex !== undefined && mapping.cellIndex !== undefined) {
-          this.injectIntoSpecificCell(mapping.tableIndex, mapping.rowIndex, mapping.cellIndex, value);
-        } else if (mapping.type === 'table-cell' && mapping.tableIndex !== undefined) {
-          // Fallback for full table replacement if it was a generic 'table' field
-          this.injectIntoTable(mapping.tableIndex, value);
-        } else if (mapping.type === 'paragraph' && mapping.paragraphIndex !== undefined) {
-          this.injectIntoParagraph(mapping.paragraphIndex, value, field.originalPattern);
+        try {
+          if (mapping.type === 'paragraph' && mapping.startParagraph !== undefined && mapping.endParagraph !== undefined) {
+            this.fillTextSection(mapping.startParagraph, mapping.endParagraph, value, field.originalPattern);
+          } else if (mapping.type === 'table-cell' && mapping.tableIndex !== undefined && mapping.rowIndex !== undefined && mapping.cellIndex !== undefined) {
+            this.injectIntoSpecificCell(mapping.tableIndex, mapping.rowIndex, mapping.cellIndex, value);
+          } else if (mapping.type === 'table-cell' && mapping.tableIndex !== undefined) {
+            this.injectIntoTable(mapping.tableIndex, value);
+          } else if (mapping.type === 'paragraph' && mapping.paragraphIndex !== undefined) {
+            this.injectIntoParagraph(mapping.paragraphIndex, value, field.originalPattern);
+          }
+        } catch (err) {
+          console.error(`[FIELD EXPORT ERROR] Failed to inject field ${field.id}:`, err);
         }
       });
     });
 
     console.table(mappingsSummary);
+    
+    // Final structural validation
+    const currentPs = this.getElementsByTagName(this.body as Element, 'p');
+    if (currentPs.length > initialPCount) {
+       console.error(`PARAGRAPH_STRUCTURE_CORRUPTED: Count increased from ${initialPCount} to ${currentPs.length}`);
+       // We don't throw here to allow recovery, but we log the warning
+    }
+
+    // FINAL CONTENT VALIDATION
+    const finalXml = new XMLSerializer().serializeToString(this.xmlDoc);
+    if (finalXml.includes("[object Object]")) {
+       console.error("CRITICAL ERROR: Generated document contains serialized '[object Object]' strings!");
+    }
+
+    const unreplacedMatch = finalXml.match(/[\.]{5,}|[_]{5,}/);
+    if (unreplacedMatch) {
+       console.error("EXPORT WARNING: Unreplaced placeholders detected.", unreplacedMatch[0]);
+       this.paragraphs.forEach((p, i) => {
+          if (/[\.]{5,}|[_]{5,}/.test(p.textContent || "")) {
+             // console.warn(`UNREPLACED_PLACEHOLDER_FOUND at P[${i}]`);
+          }
+       });
+    }
+
     console.log("--- EXPORTER: SECTION MAPPING VALIDATION COMPLETE ---");
   }
 
-  private fillTextSection(startIdx: number, endIdx: number, value: any, pattern?: string) {
-    console.log(`FILLER: Filling Text Section P[${startIdx}-${endIdx}]`);
-    const lines = String(value || "").split('\n');
-    let currentPIdx = startIdx;
-
-    // We only want to search for the pattern in the FIRST paragraph of the range usually, 
-    // or across the whole range if it's a dotted block.
-    
-    lines.forEach((line, i) => {
-      if (currentPIdx <= endIdx) {
-        // If it's a dotted line paragraph, we replace the dots. 
-        // If it's the first line and we have a pattern, use it.
-        const targetP = this.paragraphs[currentPIdx];
-        const pText = targetP?.textContent || '';
-        const pPattern = pText.match(/\.{5,}|_{5,}/)?.[0] || (i === 0 ? pattern : undefined);
-
-        this.injectIntoParagraph(currentPIdx, line, pPattern);
-        currentPIdx++;
-      } else {
-        // Range exceeded, word naturally expands
-        this.appendNewParagraphAfter(currentPIdx - 1, line);
-        currentPIdx++;
+  private safeString(val: any): string {
+    if (val === undefined || val === null) return "";
+    if (typeof val === 'object') {
+      if (Array.isArray(val)) {
+        // If it's a 1D array of strings, join them with line breaks or commas
+        return val.filter(v => v !== undefined && v !== null).map(v => this.safeString(v)).join("\n");
       }
-    });
+      return ""; // Protect against [object Object]
+    }
+    const s = String(val);
+    if (s === "[object Object]") return "";
+    return s;
+  }
 
-    // Clear remaining paragraphs in the identified placeholder range
-    while (currentPIdx <= endIdx) {
-       const targetP = this.paragraphs[currentPIdx];
-       const pText = targetP?.textContent || '';
-       const pPattern = pText.match(/\.{5,}|_{5,}/)?.[0];
-       if (pPattern) {
-         this.injectIntoParagraph(currentPIdx, "", pPattern);
-       } else {
-         // If no dots, maybe it was just extra space? don't clear it if it looks like content
-       }
-       currentPIdx++;
+  private fillTextSection(startIdx: number, endIdx: number, value: any, pattern?: string) {
+    const text = this.safeString(value);
+    
+    console.log(`[PLACEHOLDER REPLACED] Range: P[${startIdx}-${endIdx}], Value: ${text.substring(0, 30)}...`);
+
+    // Identification regex for placeholders - more inclusive to match analyzer
+    const placeholderRegex = /[\.\-_]{5,}/;
+    
+    // Find the primary target paragraph
+    let targetIdx = -1;
+    for (let i = startIdx; i <= endIdx; i++) {
+      const p = this.paragraphs[i];
+      if (!p) continue;
+      const content = p.textContent || "";
+      if (placeholderRegex.test(content) || (pattern && content.includes(pattern))) {
+        targetIdx = i;
+        break;
+      }
+    }
+
+    if (targetIdx === -1) targetIdx = startIdx;
+
+    const targetP = this.paragraphs[targetIdx];
+    if (targetP) {
+      const pText = targetP.textContent || "";
+      const dotsPattern = pText.match(/[\.\-_]{3,}/)?.[0] || pattern;
+      this.injectIntoParagraph(targetIdx, text, dotsPattern);
+    }
+
+    // CLEANUP PASS: Remove ALL other residual placeholder paragraphs in the range
+    for (let i = startIdx; i <= endIdx; i++) {
+      if (i === targetIdx) continue;
+      const p = this.paragraphs[i];
+      if (!p || !p.parentElement) continue;
+
+      const content = (p.textContent || "").trim();
+      // If it's purely dots/underscores/numbering+dots - it's a residual placeholder
+      if (/^(\s*\d+[\.\)]\s*)?[\.\-_]{3,}\s*$/.test(content) || /^[\s\.\-_]*$/.test(content)) {
+        console.log(`FILLER: Cleaning up residual placeholder paragraph at P[${i}]`);
+        p.parentElement.removeChild(p);
+      }
     }
   }
 
@@ -140,13 +201,21 @@ export class DocumentFiller {
     if (!tc) return;
 
     const tNodes = this.getElementsByTagName(tc, 't');
+    const safeVal = this.safeString(value);
+
     if (tNodes.length > 0) {
-      // Put text into the first text node found
-      tNodes[0].textContent = String(value || "");
-      // Preserve existing run style by not overriding it if not needed
-      // Clear other text nodes in the cell to avoid duplicates
-      for (let i = 1; i < tNodes.length; i++) {
-        tNodes[i].textContent = "";
+      // Robust replacement in cell: try to find dots first
+      const fullText = tNodes.map(n => n.textContent || '').join('');
+      const dotsPattern = fullText.match(/\.{2,}|_{2,}/)?.[0];
+      
+      if (dotsPattern) {
+         // Replace ALL t nodes content in cell if it's a dotted cell
+         tNodes[0].textContent = safeVal;
+         for (let i = 1; i < tNodes.length; i++) tNodes[i].textContent = "";
+      } else {
+        // Fallback: clear and replace first node
+        tNodes[0].textContent = safeVal;
+        for (let i = 1; i < tNodes.length; i++) tNodes[i].textContent = "";
       }
     } else {
       // Only create new structure if cell has no text nodes
@@ -158,25 +227,11 @@ export class DocumentFiller {
       const r = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:r');
       const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
       t.setAttribute('xml:space', 'preserve');
-      t.textContent = String(value || "");
+      t.textContent = safeVal;
       r.appendChild(t);
       p.appendChild(r);
       this.applyRunStyle(r);
     }
-  }
-
-  private appendNewParagraphAfter(idx: number, value: any) {
-    const p = this.paragraphs[idx];
-    if (!p) return;
-    const newP = p.cloneNode(true) as Element;
-    // Clear placeholders
-    const ts = this.getElementsByTagName(newP, 't');
-    if (ts.length > 0) {
-       ts[0].textContent = String(value);
-       // Clear others
-       for (let i = 1; i < ts.length; i++) ts[i].textContent = '';
-    }
-    p.parentElement?.insertBefore(newP, p.nextSibling);
   }
 
   private enforceTimesNewRoman(rPr: Element) {
@@ -194,49 +249,117 @@ export class DocumentFiller {
     const p = this.paragraphs[idx];
     if (!p || value === undefined || value === null) return;
 
-    const textValue = String(value);
-    const textNodes = this.getElementsByTagName(p, 't');
-    const fullText = textNodes.map(n => n.textContent || '').join('');
+    const oldText = p.textContent || "";
+    const textValue = this.safeString(value);
+    const runs = this.getElementsByTagName(p, 'r');
+    if (runs.length === 0) {
+      // Create a run if none exist
+      const newRun = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:r');
+      p.appendChild(newRun);
+      this.surgicalReplaceInRun(p, newRun, textValue);
+      console.log("REPLACED", idx, oldText, p.textContent || "");
+      return;
+    }
+
+    // 1. Identify the specific placeholder run
+    let targetRun: Element | null = null;
+    let effectivePattern = pattern;
+
+    for (const r of runs) {
+       const rText = this.getElementsByTagName(r, 't').map(n => n.textContent || '').join('');
+       const dotsMatch = rText.match(/[\.\-_]{3,}/);
+       if ((effectivePattern && rText.includes(effectivePattern)) || dotsMatch) {
+          targetRun = r;
+          if (!effectivePattern && dotsMatch) effectivePattern = dotsMatch[0];
+          break;
+       }
+    }
+
+    // 2. If no specific placeholder run found, fallback to first non-empty run
+    if (!targetRun) targetRun = runs[0];
+
+    // 3. Perform surgical replacement in the target run
+    this.surgicalReplaceInRun(p, targetRun, textValue, effectivePattern);
+
+    // 4. Aggressively cleanup ANY other runs in the same paragraph that contain placeholders
+    const remainingRunsAfterReplacement = this.getElementsByTagName(p, 'r');
+    remainingRunsAfterReplacement.forEach(r => {
+       const ts = this.getElementsByTagName(r, 't');
+       ts.forEach(t => {
+          if (t.textContent && /[\.\-_]{3,}/.test(t.textContent)) {
+             t.textContent = t.textContent.replace(/[\.\-_]{3,}/g, '');
+          }
+       });
+    });
+
+    console.log("REPLACED", idx, oldText, p.textContent || "");
+  }
+
+  private surgicalReplaceInRun(p: Element, oldRun: Element, value: string, pattern?: string) {
+    const rTexts = this.getElementsByTagName(oldRun, 't');
+    const fullText = rTexts.map(n => n.textContent || '').join('');
+    const newRun = oldRun.cloneNode(true) as Element;
+    
+    // Clear all existing text nodes and line breaks in the clone to start fresh
+    const nodeNamesToRemove = ['w:t', 't', 'w:br', 'br', 'w:cr', 'cr', 'w:tab', 'tab'];
+    Array.from(newRun.childNodes).forEach(node => {
+       const name = (node as Element).nodeName;
+       // We keep w:rPr to preserve styles
+       if (nodeNamesToRemove.includes(name) || nodeNamesToRemove.includes(name.replace('w:', ''))) {
+          newRun.removeChild(node);
+       }
+    });
+
+    const lines = value.split('\n');
 
     if (pattern && fullText.includes(pattern)) {
-      // Find the specific node containing the pattern part
-      for (const t of textNodes) {
-        if (t.textContent?.includes(pattern)) {
-          t.textContent = t.textContent.replace(pattern, textValue);
-          this.applyRunStyle(t.parentElement);
-          return;
-        }
-      }
-      
-      // If pattern is split across text nodes (complex case)
-      let replaced = false;
-      for (const t of textNodes) {
-        if (!replaced && (t.textContent?.includes('.') || t.textContent?.includes('_'))) {
-          t.textContent = fullText.replace(pattern, textValue);
-          this.applyRunStyle(t.parentElement);
-          replaced = true;
-        } else if (replaced && (t.textContent?.includes('.') || t.textContent?.includes('_'))) {
-          t.textContent = '';
-        }
-      }
+       const startIdx = fullText.indexOf(pattern);
+       const prefix = fullText.substring(0, startIdx);
+       const suffix = fullText.substring(startIdx + pattern.length);
+
+       if (prefix) {
+          const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
+          t.setAttribute('xml:space', 'preserve');
+          t.textContent = prefix;
+          newRun.appendChild(t);
+       }
+
+       lines.forEach((line, i) => {
+          const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
+          t.setAttribute('xml:space', 'preserve');
+          t.textContent = line;
+          newRun.appendChild(t);
+          if (i < lines.length - 1) {
+             newRun.appendChild(this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:br'));
+          }
+       });
+
+       if (suffix) {
+          const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
+          t.setAttribute('xml:space', 'preserve');
+          t.textContent = suffix;
+          newRun.appendChild(t);
+       }
     } else {
-      // No pattern: Replace entire content while keeping first run's style if possible
-      if (textNodes.length > 0) {
-        textNodes[0].textContent = textValue;
-        this.applyRunStyle(textNodes[0].parentElement);
-        for (let i = 1; i < textNodes.length; i++) {
-          textNodes[i].textContent = '';
-        }
-      } else {
-        // Build new run if empty
-        const r = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:r');
-        const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
-        t.setAttribute('xml:space', 'preserve');
-        t.textContent = textValue;
-        r.appendChild(t);
-        p.appendChild(r);
-        this.applyRunStyle(r);
-      }
+       // Total replacement within the run
+       lines.forEach((line, i) => {
+          const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
+          t.setAttribute('xml:space', 'preserve');
+          t.textContent = line;
+          newRun.appendChild(t);
+          if (i < lines.length - 1) {
+             newRun.appendChild(this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:br'));
+          }
+       });
+    }
+
+    this.applyRunStyle(newRun);
+    
+    // Replace old run with the fresh new one
+    if (oldRun.parentNode) {
+       p.replaceChild(newRun, oldRun);
+    } else {
+       p.appendChild(newRun);
     }
   }
 
@@ -266,17 +389,41 @@ export class DocumentFiller {
     color.setAttribute('w:val', '000000');
   }
 
+  private replaceCellContent(tc: Element, value: string) {
+    let p = this.getElementsByTagName(tc, 'p')[0];
+    if (!p) {
+      p = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:p');
+      tc.appendChild(p);
+    }
+    this.replaceParagraphContent(p, value);
+  }
+
   private replaceParagraphContent(p: Element, value: string) {
+    // SECURITY: Ensure p is actually a paragraph node, if not find/create one
+    if (p.nodeName !== 'w:p' && p.nodeName !== 'p') {
+      const existingP = this.getElementsByTagName(p, 'p')[0];
+      if (existingP) {
+        return this.replaceParagraphContent(existingP, value);
+      }
+      // If we still don't have a p and this was a tc, we should have used replaceCellContent
+    }
+
+    const pPr = this.getElementsByTagName(p, 'pPr')[0];
     const runs = this.getElementsByTagName(p, 'r');
     let rPr: Element | null = null;
-    
     if (runs.length > 0) {
       const existingRPr = this.getElementsByTagName(runs[0], 'rPr')[0];
       if (existingRPr) rPr = existingRPr.cloneNode(true) as Element;
     }
 
-    while (p.firstChild) p.removeChild(p.firstChild);
-    
+    // Surgical clear: keep pPr, remove others
+    Array.from(p.childNodes).forEach(node => {
+      const name = (node as Element).nodeName;
+      if (name !== 'w:pPr' && name !== 'pPr') {
+        p.removeChild(node);
+      }
+    });
+
     const newRun = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:r');
     if (!rPr) rPr = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:rPr');
     this.enforceTimesNewRoman(rPr);
@@ -287,7 +434,6 @@ export class DocumentFiller {
 
     newRun.appendChild(rPr);
     
-    // Support multi-line by splitting by \n and adding <w:br/>
     const lines = value.split('\n');
     lines.forEach((line, i) => {
       const newText = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
@@ -313,63 +459,84 @@ export class DocumentFiller {
     }
     
     if (!Array.isArray(value)) {
-        console.warn(`FILLER: Value for table ${idx} is not an array`, value);
-        return;
-    }
-
-    // Filter out completely empty rows if they are just placeholders
-    const dataRows = value.filter(row => row.some(cell => cell && String(cell).trim() !== ''));
-    if (dataRows.length === 0) {
-        console.log(`FILLER: Table ${idx} has no content to fill.`);
+        console.error(`FILLER ERROR: Value for table ${idx} is not an array`, typeof value, value);
         return;
     }
 
     const trs = this.getElementsByTagName(tbl, 'tr');
     if (trs.length === 0) return;
 
-    console.log(`FILLER: Table ${idx} found with ${trs.length} existing rows. Data rows to inject: ${dataRows.length}`);
+    const templateHeaders = this.getElementsByTagName(trs[0], 'tc').map(c => c.textContent?.trim() || '');
+
+    // Robustly filter data rows
+    const dataRows = value.filter(row => Array.isArray(row) && row.some(cell => cell && String(cell).trim() !== ''));
+    
+    // If the first row of values matches headers from template, skip it
+    const actualDataRows = (dataRows.length > 0 && dataRows[0].every((val: any, i: number) => String(val).trim() === templateHeaders[i]))
+      ? dataRows.slice(1)
+      : dataRows;
+
+    if (actualDataRows.length === 0) {
+        console.log(`FILLER: Table ${idx} has no content to fill (0 data rows found after header filter).`);
+        return;
+    }
+
+    console.log(`FILLER: Table ${idx} injection starting. Template Rows: ${trs.length}. New Data Rows: ${actualDataRows.length}`);
 
     // We use the second row as a template for data if possible, else the first
     const templateRow = trs[1] || trs[0];
     
-    // Clear existing dynamic rows (keep headers)
+    // CLEAR existing dynamic rows safely using parent approach to avoid corruption in container nodes (like SDT)
     for (let i = trs.length - 1; i > 0; i--) {
-      tbl.removeChild(trs[i]);
+        const row = trs[i];
+        if (row && row.parentElement) {
+            row.parentElement.removeChild(row);
+        }
     }
 
-    dataRows.forEach((rowData: string[]) => {
-      const newRow = templateRow.cloneNode(true) as Element;
-      const cells = this.getElementsByTagName(newRow, 'tc');
+    const grid = this.getElementsByTagName(tbl, 'tblGrid')[0];
+    const headerRow = trs[0];
 
-      // Style override for visibility (Fixing the "blue" issue)
-      cells.forEach(cell => {
-        let tcPr = this.getElementsByTagName(cell, 'tcPr')[0];
-        if (!tcPr) {
-          tcPr = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:tcPr');
-          cell.insertBefore(tcPr, cell.firstChild);
-        }
+    actualDataRows.forEach((rowData: string[], rIdx: number) => {
+      try {
+        const newRow = templateRow.cloneNode(true) as Element;
+        const cells = this.getElementsByTagName(newRow, 'tc');
 
-        // Deep clearing of all shading/background attributes
-        const shadingNodes = this.getElementsByTagName(tcPr, 'shd');
-        shadingNodes.forEach(s => tcPr.removeChild(s));
-        
-        const shd = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:shd');
-        shd.setAttribute('w:val', 'clear');
-        shd.setAttribute('w:color', 'auto');
-        shd.setAttribute('w:fill', 'FFFFFF');
-        // Word specific attributes for themes
-        shd.setAttribute('w:themeColor', 'white');
-        shd.setAttribute('w:themeFill', 'white');
-        tcPr.appendChild(shd);
-      });
+        // Style override for visibility
+        cells.forEach(cell => {
+          let tcPr = this.getElementsByTagName(cell, 'tcPr')[0];
+          if (!tcPr) {
+            tcPr = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:tcPr');
+            cell.insertBefore(tcPr, cell.firstChild);
+          }
 
-      rowData.forEach((cellVal, cIdx) => {
-        if (cells[cIdx]) {
-          this.replaceParagraphContent(cells[cIdx], String(cellVal || ""));
-        }
-      });
-      tbl.appendChild(newRow);
+          const shadingNodes = this.getElementsByTagName(tcPr, 'shd');
+          shadingNodes.forEach(s => tcPr.removeChild(s));
+          
+          const shd = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:shd');
+          shd.setAttribute('w:val', 'clear');
+          shd.setAttribute('w:color', 'auto');
+          shd.setAttribute('w:fill', 'FFFFFF');
+          shd.setAttribute('w:themeColor', 'white');
+          shd.setAttribute('w:themeFill', 'white');
+          tcPr.appendChild(shd);
+        });
+
+        rowData.forEach((cellVal, cIdx) => {
+          if (cells[cIdx]) {
+            const cellText = this.safeString(cellVal);
+            this.replaceCellContent(cells[cIdx], cellText);
+          }
+        });
+
+        // Insert row at the end of the table
+        tbl.appendChild(newRow);
+      } catch (rowErr) {
+        console.error(`FILLER ERROR: Failed to inject row ${rIdx} into table ${idx}:`, rowErr);
+      }
     });
+
+    console.log(`FILLER: Table ${idx} injection complete.`);
   }
 
   /**
@@ -408,4 +575,3 @@ export const exportDocx = async (docData: DocumentData, formValues: Record<strin
     alert("Export failed. This usually happens with corrupted templates or browser XML limitations.");
   }
 };
-
