@@ -40,7 +40,7 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
   const normalizeTitle = (title: string): string => {
     return title
       .toLowerCase()
-      .replace(/^([ivxlcdm]+|[0-9]+)[\.\s\-]+/i, '') // Remove roman numerals or numbers at start
+      .replace(/^[\s]*([ivxlcdm]+|[0-9]+)[\.\s\-]+\s*/i, '') // Remove roman numerals or numbers at start
       .replace(/[^\w\s]/g, ' ') // Replace punctuation with space
       .replace(/\s+/g, ' ') // Collapse spaces
       .trim();
@@ -57,12 +57,21 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
       'results/observations'
     ];
     const interpretationKeywords = [
-      'interpretation', 'interpretation of results', 'analysis', 
-      'analysis of results', 'discussion', 'inference', 'evaluation'
+      'interpretation',
+      'interpretation of results',
+      'meaning of results',
+      'students to state the meaning',
+      'analysis',
+      'discussion',
+      'inference'
     ];
     const conclusionKeywords = [
-      'conclusion', 'conclusions', 'summary', 'final remarks', 
-      'remarks', 'learning outcome'
+      'conclusion',
+      'conclusions',
+      'students to draw conclusions',
+      'draw conclusions',
+      'final remarks',
+      'summary'
     ];
     const resourceKeywords = [
       'actual resources used', 'actual resources', 'materials used', 
@@ -87,8 +96,12 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
       'practicum related questions'
     ];
     
-    if (normalized.includes('questions') && (normalized.includes('suggested') || normalized.includes('practicum'))) return true;
-    return keywords.some(k => normalized === k || normalized.includes(k));
+    let result = false;
+    if (normalized.includes('questions') && (normalized.includes('suggested') || normalized.includes('practicum'))) result = true;
+    else result = keywords.some(k => normalized === k || normalized.includes(k));
+
+    if (result) console.log(`[isExcluded] TRUE for: "${title}" (Normalized: "${normalized}")`);
+    return result;
   };
 
   const isFacultyAssessment = (title: string): boolean => {
@@ -99,12 +112,20 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
   const isStudentFillableTitle = (title: string): boolean => {
     const normalized = normalizeTitle(title);
+    
+    // Explicitly prioritize core student-fillable sections
+    if (normalized.includes('interpretation') || normalized.includes('conclusion')) {
+      return true;
+    }
+
     const role = getSectionRole(normalized);
     const keywords = [
       'to be filled by', 'learner', 'student', 'state the meaning', 
       'draw conclusions', 'if any'
     ];
-    return (!!role || keywords.some(k => normalized.includes(k))) && !isExcluded(title);
+    const isFillable = (!!role || keywords.some(k => normalized.includes(k))) && !isExcluded(title);
+    if (isFillable) console.log(`[isStudentFillableTitle] TRUE for: "${title}"`);
+    return isFillable;
   };
 
   const containsPlaceholder = (text: string): boolean => {
@@ -128,12 +149,42 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
   let lastSectionHeaderIndex = -1;
 
   const headerFields: Field[] = [];
+  let isInStaticContent = false;
+  const STATIC_SECTION_MARKERS = [
+    "Suggested Practicum Related Questions",
+    "References",
+    "Suggestions for further reading",
+    "Suggested Assessment Scheme",
+    "Performance Indicators",
+    "To be filled by the Faculty Member"
+  ];
 
   structuralElements.forEach((node, index) => {
     if (processedNodeIndices.has(index)) return;
     
     const text = node.textContent?.trim() || '';
-    
+    if (!text) {
+      if (node.nodeName === 'w:p') currentSection.content += '\n';
+      return;
+    }
+
+    // Static content stop marker detection
+    const normalizedText = normalizeTitle(text);
+    const matchedStaticMarker = STATIC_SECTION_MARKERS.find(marker => {
+      const normalizedMarker = normalizeTitle(marker);
+      return normalizedText === normalizedMarker || normalizedText.includes(normalizedMarker);
+    });
+
+    if (matchedStaticMarker) {
+      console.log("STATIC CONTENT START:", matchedStaticMarker, "at text:", text);
+      isInStaticContent = true;
+    }
+
+    if (isInStaticContent) {
+      console.log("SKIPPING STATIC CONTENT:", text);
+      return;
+    }
+
     // Standalone Date Field Detection
     if (node.nodeName === 'w:p') {
       const dateMatch = text.match(/Date\s*:\s*([.\-_…]{2,})/i);
@@ -163,22 +214,46 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
     // Header Detection & Section Partitioning
     if (node.nodeName === 'w:p') {
-      const romanNumeralRegex = /^([IVXLCDM]+)\s+(.+)$/i;
+      const romanNumeralRegex = /^\s*([IVXLCDM]+)[\.\s\-]+\s*(.+)$/i;
       const isRomanHeader = romanNumeralRegex.test(text);
       const normalizedTitle = normalizeTitle(text);
+
+      const forceHeaderKeywords = [
+        "interpretation",
+        "interpretation of results",
+        "conclusion",
+        "conclusions",
+        "results/observations",
+        "observations",
+        "actual procedure"
+      ];
+      const isForcedHeader = forceHeaderKeywords.some(k => normalizedTitle.includes(k));
       
       const isHeader = (
-        isStudentFillableTitle(text) || 
-        isExcluded(text) ||
-        isFacultyAssessment(text) ||
-        isRomanHeader
-      ) && text.length < 150 && text.length > 2;
+        (
+          isStudentFillableTitle(text) || 
+          isExcluded(text) ||
+          isFacultyAssessment(text) ||
+          isRomanHeader
+        ) && (!containsPlaceholder(text) || isForcedHeader)
+      ) && text.length < 500 && text.length > 2;
 
       if (isHeader) {
+        console.log("HEADER DETECTED:", { 
+          text: text.substring(0, 100), 
+          isRomanHeader, 
+          normalizedTitle,
+          isStudentFillable: isStudentFillableTitle(text), 
+          isExcluded: isExcluded(text),
+          isForcedHeader,
+          containsPlaceholder: containsPlaceholder(text),
+          length: text.length
+        });
         let intent: Section['intent'] = 'template-static';
-        if (isExcluded(text)) intent = 'template-static';
+        // Priority: Student Fillable > Faculty Evaluation > Excluded
+        if (isStudentFillableTitle(text)) intent = 'student-fillable';
         else if (isFacultyAssessment(text)) intent = 'faculty-evaluation';
-        else if (isStudentFillableTitle(text)) intent = 'student-fillable';
+        else if (isExcluded(text)) intent = 'template-static';
 
         // Finalize previous section range
         if (currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation') {
@@ -198,12 +273,26 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
         }
 
         if (currentSection.fields.length > 0 || currentSection.id !== 'root') {
+          console.log('[SECTION-Pushed]', currentSection.title, 'FIELDS:', currentSection.fields.length);
           sections.push({ ...currentSection, content: currentSection.content.trim() });
         }
 
+        const rawTitle = text.replace(/[.\-_…]{3,}/g, '').trim();
+        const titleMatch = rawTitle.match(/^(.+?)\s*\((.+)\)\s*$/);
+        let finalTitle = rawTitle;
+        let description = "";
+        if (titleMatch) {
+          finalTitle = titleMatch[1].trim();
+          description = titleMatch[2].trim();
+        }
+
+        const hPIdx = paragraphs.indexOf(node as any);
+
         currentSection = {
           id: `section-${index}`,
-          title: text,
+          title: finalTitle,
+          description: description,
+          headerParagraphIndex: hPIdx,
           content: '',
           fields: [],
           intent
@@ -394,6 +483,7 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
   }
 
   if (currentSection.fields.length > 0 || currentSection.id !== 'root') {
+    console.log('[SECTION]', currentSection.title, 'FIELDS:', currentSection.fields.length);
     sections.push({ ...currentSection, content: currentSection.content.trim() });
   }
 
@@ -408,64 +498,69 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     });
   }
 
-  console.log("FINAL SECTIONS", sections.map(s => s.title));
-
-  // Refine sections and only keep those that are truly student-fillable
-  const finalizedSections = sections.filter(s => {
-    const normalizedTitle = normalizeTitle(s.title);
-    const role = getSectionRole(normalizedTitle);
-    const isActuallyExcluded = isExcluded(s.title);
+  console.log("--- FILTERING START ---");
+  console.log("TOTAL CANDIDATES BEFORE FILTER:", sections.length);
+  sections.forEach((s, i) => {
+    const norm = normalizeTitle(s.title);
     const hasFields = s.fields.length > 0;
-    
-    if (isActuallyExcluded) {
-      console.log({
-        title: s.title,
-        normalizedTitle,
-        role,
-        fields: s.fields.length,
-        kept: false,
-        reason: 'Strictly excluded'
-      });
-      return false;
-    }
+    console.log(`CANDIDATE ${i}: "${s.title}" (Normalized: "${norm}", Fields: ${s.fields.length}, Intent: ${s.intent})`);
+  });
 
-    // Keep if we already detected fields (table or paragraph)
-    if (hasFields) {
-      console.log({
-        title: s.title,
-        normalizedTitle,
-        role,
-        fields: s.fields.length,
-        kept: true,
-        reason: 'Already has fields'
-      });
-      return true;
-    }
+    // Refine sections and only keep those that are truly student-fillable
+    const finalizedSections = sections.filter(s => {
+      const normalizedTitle = normalizeTitle(s.title);
+      const role = getSectionRole(normalizedTitle);
+      const isActuallyExcluded = isExcluded(s.title);
+      const hasFields = s.fields.length > 0;
+      
+      // Check for strong signals of being fillable
+      const studentKeywords = [
+        'to be filled by', 'state the meaning', 'draw conclusions', 
+        'interpretation', 'conclusion', 'student to state'
+      ];
 
-    // Check for strong signals of being fillable
-    const hasInstructions = s.title.toLowerCase().includes('to be filled by') || 
-                           s.content.toLowerCase().includes('to be filled by') ||
-                           s.title.toLowerCase().includes('state the meaning') ||
-                           s.title.toLowerCase().includes('draw conclusions');
-                           
-    const hasPlaceholders = s.content.includes('..........') || 
-                           s.content.includes('—————') || 
-                           s.content.includes('_____') ||
-                           s.content.includes('……');
+      const hasInstructions = studentKeywords.some(k => 
+        s.title.toLowerCase().includes(k) || s.content.toLowerCase().includes(k)
+      );
+                             
+      const hasPlaceholders = containsPlaceholder(s.content) || containsPlaceholder(s.title);
+  
+      let shouldKeep = false;
+      let reason = '';
+  
+      if (isActuallyExcluded) {
+        shouldKeep = false;
+        reason = 'Strictly excluded by isExcluded()';
+      } else if (hasFields) {
+        shouldKeep = true;
+        reason = 'Already has fields (table or paragraph detected)';
+      } else if (!!role) {
+        shouldKeep = true;
+        reason = `Identified by semantic role [${role}]`;
+      } else if (hasInstructions || hasPlaceholders) {
+        shouldKeep = true;
+        reason = `Fillable signals detected (Instructions: ${hasInstructions}, Placeholders: ${hasPlaceholders})`;
+      } else {
+        shouldKeep = false;
+        reason = 'No fillable signals (no dots/instructions) and no semantic role matches';
+      }
+      
+      console.log(`[FILTER DECISION] Section: "${s.title}"`);
+      console.log(`  - Normalized: "${normalizedTitle}"`);
+      console.log(`  - Role: ${role}`);
+      console.log(`  - Intent: ${s.intent}`);
+      console.log(`  - Fields: ${s.fields.length}`);
+      console.log(`  - Instructions: ${hasInstructions}`);
+      console.log(`  - Placeholders: ${hasPlaceholders}`);
+      console.log(`  - Excluded: ${isActuallyExcluded}`);
+      console.log(`  -> KEPT: ${shouldKeep} | REASON: ${reason}`);
 
-    const shouldKeep = (s.intent === 'student-fillable' || !!role) && (hasInstructions || hasPlaceholders);
-    
-    console.log({
-      title: s.title,
-      normalizedTitle,
-      role,
-      fields: s.fields.length,
-      kept: shouldKeep,
-      reason: shouldKeep ? 'Fillable signals (fallback will apply)' : 'No fillable signals'
-    });
-    
-    return shouldKeep;
-  }).map(s => {
+      if (!shouldKeep) {
+         console.log(`  - Content preview (first 200 chars): ${s.content.substring(0, 200).replace(/\n/g, '\\n')}...`);
+      }
+      
+      return shouldKeep;
+    }).map(s => {
     const normalized = normalizeTitle(s.title);
     const role = getSectionRole(normalized);
 
@@ -507,6 +602,8 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     });
     return s;
   });
+
+  console.log("AFTER FILTER SECTIONS:", finalizedSections.map(s => s.title));
 
   return { sections: finalizedSections, html: result.value };
 };

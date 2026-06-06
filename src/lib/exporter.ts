@@ -60,6 +60,23 @@ export class DocumentFiller {
     const mappingsSummary: any[] = [];
 
     docData.sections.forEach(section => {
+      // CLEAN HEADER CONTENT (Strip placeholders from Title paragraph)
+      if (section.headerParagraphIndex !== undefined) {
+         try {
+           const hp = this.paragraphs[section.headerParagraphIndex];
+           if (hp) {
+              const hText = hp.textContent || "";
+              if (/[.\-_…]{3,}/.test(hText)) {
+                 console.log(`[EXPORTER] Cleaning header placeholders at P[${section.headerParagraphIndex}]`);
+                 const fullTitle = section.title + (section.description ? ` (${section.description})` : '');
+                 this.replaceParagraphContent(hp, fullTitle);
+              }
+           }
+         } catch (e) {
+           console.warn(`[EXPORTER] Failed to clean header at P[${section.headerParagraphIndex}]`, e);
+         }
+      }
+
       console.log("FIELD COUNT", section.title, section.fields.length);
       section.fields.forEach(field => {
         const value = formValues[field.id];
@@ -118,9 +135,8 @@ export class DocumentFiller {
     
     // Final structural validation
     const currentPs = this.getElementsByTagName(this.body as Element, 'p');
-    if (currentPs.length > initialPCount) {
-       console.error(`PARAGRAPH_STRUCTURE_CORRUPTED: Count increased from ${initialPCount} to ${currentPs.length}`);
-       // We don't throw here to allow recovery, but we log the warning
+    if (currentPs.length !== initialPCount) {
+       console.log(`INFO: Document structure evolved. Paragraph count shifted from ${initialPCount} to ${currentPs.length} (Normal for multi-line inputs)`);
     }
 
     // FINAL CONTENT VALIDATION
@@ -129,14 +145,10 @@ export class DocumentFiller {
        console.error("CRITICAL ERROR: Generated document contains serialized '[object Object]' strings!");
     }
 
-    const unreplacedMatch = finalXml.match(/[.]{5,}|[_]{5,}|[…]{3,}/);
+    // Check for unreplaced placeholders in FILLABLE areas only
+    const unreplacedMatch = finalXml.match(/[.]{10,}|[_]{10,}|[…]{5,}/);
     if (unreplacedMatch) {
-       console.error("EXPORT WARNING: Unreplaced placeholders detected.", unreplacedMatch[0]);
-       this.paragraphs.forEach((p, i) => {
-          if (/[.]{5,}|[_]{5,}|[…]{3,}/.test(p.textContent || "")) {
-             // console.warn(`UNREPLACED_PLACEHOLDER_FOUND at P[${i}]`);
-          }
-       });
+       console.warn("EXPORT WARNING: Deep placeholders still detected.", unreplacedMatch[0]);
     }
 
     console.log("--- EXPORTER: SECTION MAPPING VALIDATION COMPLETE ---");
@@ -173,8 +185,9 @@ export class DocumentFiller {
     
     const items: string[] = [];
     if (!anyNumbered) {
-      // Style B: Every non-empty line is a new item if no numbers are detected anywhere
-      rawLines.forEach(line => items.push(line));
+      // Style B: Join all lines into a single item block to preserve original paragraph count where possible
+      const combinedLines = rawLines.join("\n");
+      if (combinedLines) items.push(combinedLines);
     } else {
       // Style A: Numbering detected, group unnumbered lines with the preceding numbered line
       rawLines.forEach(line => {

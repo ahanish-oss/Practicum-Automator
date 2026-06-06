@@ -166,6 +166,9 @@ export function DynamicForm() {
                 </div>
                 <div>
                    <h3 className="text-sm font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors">{section.title}</h3>
+                   {section.description && (
+                     <p className="text-[10px] text-gray-400 italic mb-1 line-clamp-1 group-hover:line-clamp-none transition-all">{section.description}</p>
+                   )}
                    <span className="text-[10px] text-gray-400 font-medium">{filledFields} of {totalFields} fields completed</span>
                 </div>
               </div>

@@ -48,6 +48,8 @@ export interface Field {
 export interface Section {
   id: string;
   title: string;
+  description?: string;
+  headerParagraphIndex?: number;
   content: string;
   fields: Field[];
   intent?: 'student-fillable' | 'faculty-evaluation' | 'template-static' | 'assessment';

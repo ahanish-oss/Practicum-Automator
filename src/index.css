@@ -70,14 +70,14 @@
   @apply mb-8 mx-auto;
   background-color: white !important;
   color: black !important;
-  box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.15) !important;
+  box-shadow: 0 10px 30px -5px rgb(0 0 0 / 0.1) !important;
   font-family: var(--font-serif) !important;
 }
 
 .docx-high-fidelity p {
   line-height: normal !important;
-  margin-top: 0.25rem !important;
-  margin-bottom: 0.25rem !important;
+  margin-block-start: 0;
+  margin-block-end: 0;
 }
 
 .docx-high-fidelity span {

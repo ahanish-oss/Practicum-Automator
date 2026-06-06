@@ -44,7 +44,7 @@ export function DocPreview() {
             el.style.marginRight = 'auto';
             el.style.backgroundColor = 'white';
             el.style.borderRadius = '2px';
-            el.style.padding = '2cm'; // standard margin
+            el.style.padding = '1in'; // standard word margin
           });
         } catch (error) {
           console.error('High fidelity render failed:', error);
