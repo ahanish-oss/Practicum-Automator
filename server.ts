@@ -105,10 +105,13 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
 
-  app.post("/api/gemini/generate", async (req, res) => {
-    try {
-      console.log("[API] Request received");
-      const { prompt, fields, model } = req.body;
+  // Only register Gemini endpoint in development
+  // In production on Vercel, use /api/gemini/generate.ts serverless function
+  if (process.env.NODE_ENV !== "production") {
+    app.post("/api/gemini/generate", async (req, res) => {
+      try {
+        console.log("[API] Request received");
+        const { prompt, fields, model } = req.body;
       
       let promptToUse = prompt || "";
       if (fields && Array.isArray(fields) && fields.length > 0) {
@@ -205,6 +208,7 @@ Instructions for generating field values:
       res.status(200).json({ success: false, error: "AI service temporarily unavailable" });
     }
   });
+  }
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
