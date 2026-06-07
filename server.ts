@@ -3,6 +3,11 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import { exec } from "child_process";
+import { promisify } from "util";
+import fs from "fs";
+
+const execPromise = promisify(exec);
 
 dotenv.config();
 
@@ -208,7 +213,78 @@ Instructions for generating field values:
       res.status(200).json({ success: false, error: "AI service temporarily unavailable" });
     }
   });
+
+  app.post("/api/convert-to-pdf", async (req, res) => {
+    try {
+      console.log("[API] PDF conversion request received");
+      const { docx } = req.body;
+      if (!docx) {
+        return res.status(200).json({ success: false, error: "Missing DOCX data" });
+      }
+
+      const docxBuffer = Buffer.from(docx, 'base64');
+      const pdfBuffer = await convertDocxBufferToPdf(docxBuffer);
+      const pdfBase64 = pdfBuffer.toString('base64');
+
+      res.json({ success: true, pdf: pdfBase64 });
+    } catch (error: any) {
+      console.error("[API PDF ERROR]", error);
+      res.status(200).json({ success: false, error: "Unable to generate PDF. Please try again." });
+    }
+  });
   }
+
+async function convertDocxBufferToPdf(docxBuffer: Buffer): Promise<Buffer> {
+  const tempDir = path.join(process.cwd(), 'temp_conversion');
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
+
+  const tempId = Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+  const docxPath = path.join(tempDir, `${tempId}.docx`);
+  const pdfPath = path.join(tempDir, `${tempId}.pdf`);
+  const scriptPath = path.join(tempDir, `${tempId}.ps1`);
+
+  try {
+    await fs.promises.writeFile(docxPath, docxBuffer);
+
+    const psScript = `
+$ErrorActionPreference = 'Stop'
+$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+try {
+    $doc = $word.Documents.Open("${docxPath.replace(/\\/g, '\\\\')}")
+    $doc.SaveAs("${pdfPath.replace(/\\/g, '\\\\')}", 17)
+    $doc.Close()
+} finally {
+    $word.Quit()
+    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($word) | Out-Null
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+}
+`;
+
+    await fs.promises.writeFile(scriptPath, psScript, 'utf8');
+    await execPromise(`powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`);
+
+    if (!fs.existsSync(pdfPath)) {
+      throw new Error("PDF file was not created by the converter");
+    }
+
+    const pdfBuffer = await fs.promises.readFile(pdfPath);
+    return pdfBuffer;
+  } finally {
+    try {
+      if (fs.existsSync(docxPath)) await fs.promises.unlink(docxPath);
+    } catch {}
+    try {
+      if (fs.existsSync(pdfPath)) await fs.promises.unlink(pdfPath);
+    } catch {}
+    try {
+      if (fs.existsSync(scriptPath)) await fs.promises.unlink(scriptPath);
+    } catch {}
+  }
+}
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

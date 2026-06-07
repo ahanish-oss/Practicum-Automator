@@ -699,18 +699,34 @@ export class DocumentFiller {
 }
 
 /**
+ * Convenience wrapper to generate a filled DOCX Blob
+ */
+export const generateDocxBlob = async (docData: DocumentData, formValues: Record<string, any>): Promise<Blob> => {
+  console.log("--- EXPORTER: Invoking DocumentFiller to generate Blob ---");
+  const filler = new DocumentFiller(docData.originalContent as ArrayBuffer);
+  await filler.load();
+  filler.fill(docData, formValues);
+  const rawBlob = filler.generate();
+  // Wrap with the official Microsoft Word DOCX MIME type
+  return new Blob([rawBlob], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+};
+
+/**
  * Convenience wrapper for the DocumentFiller
  */
 export const exportDocx = async (docData: DocumentData, formValues: Record<string, any>) => {
   console.log("--- EXPORTER: Invoking DocumentFiller ---");
   
   try {
-    const filler = new DocumentFiller(docData.originalContent as ArrayBuffer);
-    await filler.load();
-    filler.fill(docData, formValues);
-    const blob = filler.generate();
-    
-    saveAs(blob, `Filled_${docData.name}`);
+    const blob = await generateDocxBlob(docData, formValues);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Filled_${docData.name}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
     console.log("EXPORTER: Download triggered.");
   } catch (error) {
     console.error("EXPORTER CRITICAL ERROR:", error);

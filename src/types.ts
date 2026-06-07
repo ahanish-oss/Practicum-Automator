@@ -75,6 +75,8 @@ export interface AppState {
   analysisProgress: number;
   isDarkMode: boolean;
   highlightedFieldId: string | null;
+  generatedDocxBlob: Blob | null;
+  previewMode: 'original' | 'generated';
   
   setDocument: (doc: DocumentData | null) => void;
   updateFormValue: (fieldId: string, value: string | any[]) => void;
@@ -84,4 +86,6 @@ export interface AppState {
   setHighlightedField: (id: string | null) => void;
   resetAll: () => void;
   setFormValues: (values: Record<string, string | any[]>) => void;
+  setGeneratedDocxBlob: (blob: Blob | null) => void;
+  setPreviewMode: (mode: 'original' | 'generated') => void;
 }

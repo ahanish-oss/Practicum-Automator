@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import { useEffect, useState } from 'react';
 import { useStore } from './store/useStore';
 import { FileUploader } from './components/FileUploader';
@@ -12,20 +7,26 @@ import { DraftsPanel } from './components/DraftsPanel';
 import { AnalysisProgress } from './components/AnalysisProgress';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { FileText, Download, RotateCcw, CheckCircle2, History } from 'lucide-react';
-import { exportDocx } from './lib/exporter';
+import { FileText, Download, RotateCcw, CheckCircle2, History, Eye, Loader2 } from 'lucide-react';
+import { exportDocx, generateDocxBlob } from './lib/exporter';
 import { db } from './lib/db';
 import { motion, AnimatePresence } from 'framer-motion';
+import { saveAs } from 'file-saver';
 
 export default function App() {
   const { 
     document: appDocument, 
     analysisProgress, 
     resetAll,
-    formValues 
+    formValues,
+    generatedDocxBlob,
+    previewMode,
+    setGeneratedDocxBlob,
+    setPreviewMode
   } = useStore();
 
   const [showDrafts, setShowDrafts] = useState(false);
+  const [isConvertingPdf, setIsConvertingPdf] = useState(false);
 
   const handleSaveDraft = async () => {
     if (!appDocument) return;
@@ -33,8 +34,8 @@ export default function App() {
     setShowDrafts(true);
   };
 
-  const validateAndExport = () => {
-    if (!appDocument) return;
+  const validateAndGenerateBlob = async (): Promise<Blob | null> => {
+    if (!appDocument) return null;
 
     // Validation: Check if all editable columns are filled for any row that has at least one entry
     const allFields = appDocument.sections.flatMap(s => s.fields);
@@ -58,11 +59,103 @@ export default function App() {
           .map(f => f.label);
         
         alert(`Validation Error for "${rowLabel}": Please provide ${missingLabels.join(', ')}.`);
-        return;
+        return null;
       }
     }
 
-    exportDocx(appDocument, formValues);
+    try {
+      const blob = await generateDocxBlob(appDocument, formValues);
+      setGeneratedDocxBlob(blob);
+      return blob;
+    } catch (error) {
+      console.error("Failed to generate DOCX blob:", error);
+      alert("Failed to generate document. Please check the template format.");
+      return null;
+    }
+  };
+
+  const downloadFile = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Use a slight timeout to revoke the object URL so the browser/download manager has time to start downloading
+    setTimeout(() => URL.revokeObjectURL(url), 100);
+  };
+
+  const handleGenerateReport = async () => {
+    const blob = await validateAndGenerateBlob();
+    if (blob) {
+      downloadFile(blob, `Filled_${appDocument.name}`);
+    }
+  };
+
+  const handlePreviewGenerated = async () => {
+    const blob = await validateAndGenerateBlob();
+    if (blob) {
+      setPreviewMode('generated');
+      // Scroll to the preview area
+      setTimeout(() => {
+        const previewEl = document.querySelector('.docx-viewer-container');
+        if (previewEl) {
+          previewEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    }
+  };
+
+  const handleDownloadDocx = () => {
+    if (!generatedDocxBlob) {
+      alert("Generate the report before previewing.");
+      return;
+    }
+    downloadFile(generatedDocxBlob, `Filled_${appDocument.name}`);
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!generatedDocxBlob) {
+      alert("Generate the report before exporting.");
+      return;
+    }
+    if (!appDocument) return;
+
+    setIsConvertingPdf(true);
+    try {
+      // Convert Blob to Base64
+      const reader = new FileReader();
+      reader.readAsDataURL(generatedDocxBlob);
+      reader.onloadend = async () => {
+        const base64Data = (reader.result as string).split(',')[1];
+        try {
+          const response = await fetch('/api/convert-to-pdf', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ docx: base64Data })
+          });
+          const data = await response.json();
+          if (data.success && data.pdf) {
+            const pdfBlob = new Blob([Uint8Array.from(atob(data.pdf), c => c.charCodeAt(0))], { type: 'application/pdf' });
+            downloadFile(pdfBlob, `Filled_${appDocument.name.replace('.docx', '')}.pdf`);
+          } else {
+            alert(data.error || "Unable to generate PDF. Please try again.");
+          }
+        } catch (e) {
+          console.error("PDF conversion endpoint error:", e);
+          alert("Unable to generate PDF. Please try again.");
+        } finally {
+          setIsConvertingPdf(false);
+        }
+      };
+    } catch (err) {
+      console.error("Failed to read DOCX blob:", err);
+      alert("Unable to generate PDF. Please try again.");
+      setIsConvertingPdf(false);
+    }
   };
 
   return (
@@ -114,13 +207,53 @@ export default function App() {
                 >
                   <RotateCcw className="w-4 h-4" />
                 </Button>
+                
                 <Button 
-                   onClick={validateAndExport}
+                   onClick={handlePreviewGenerated}
+                   variant="outline"
+                   className="border-gray-200 text-gray-700 hover:text-indigo-600 rounded-xl px-4 h-11 text-[11px] font-semibold transition-all hover:bg-gray-50"
+                >
+                   <Eye className="w-4 h-4 mr-2" />
+                   Preview Generated Report
+                </Button>
+
+                <Button 
+                   onClick={handleGenerateReport}
                    className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-5 h-11 text-[11px] font-semibold shadow-xl shadow-indigo-100 transition-all border-none"
                 >
                    <Download className="w-4 h-4 mr-2" />
                    Generate Report
                 </Button>
+
+                {generatedDocxBlob && (
+                  <div className="flex items-center gap-2 pl-3 border-l border-gray-100">
+                    <Button 
+                       onClick={handleDownloadDocx}
+                       variant="outline"
+                       className="border-indigo-100 text-indigo-600 hover:bg-indigo-50/50 rounded-xl px-4 h-11 text-[11px] font-semibold transition-all"
+                    >
+                       Download DOCX
+                    </Button>
+                    <Button 
+                       onClick={handleDownloadPdf}
+                       variant="outline"
+                       className="border-indigo-100 text-indigo-600 hover:bg-indigo-50/50 rounded-xl px-4 h-11 text-[11px] font-semibold transition-all flex items-center gap-2"
+                       disabled={isConvertingPdf}
+                    >
+                       {isConvertingPdf ? (
+                         <>
+                           <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                           Converting...
+                         </>
+                       ) : (
+                         <>
+                           <Download className="w-4 h-4" />
+                           Download PDF
+                         </>
+                       )}
+                    </Button>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -171,7 +304,30 @@ export default function App() {
                             <CheckCircle2 className="w-4 h-4 text-indigo-500" />
                             <h3 className="text-[11px] font-bold text-gray-400 tracking-wider uppercase">High-Fidelity Preview</h3>
                          </div>
-                         <span className="text-[10px] text-gray-300 font-medium">Standard A4 Layout • ISO 216</span>
+                         
+                         {/* Toggle Tabs for Original vs Generated Preview */}
+                         <div className="flex items-center gap-1 bg-gray-100/80 p-1 rounded-xl border border-gray-200/50">
+                           <button
+                             onClick={() => setPreviewMode('original')}
+                             className={`text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                               previewMode === 'original' 
+                                 ? 'bg-white text-indigo-600 shadow-sm border border-gray-200/20' 
+                                 : 'text-gray-500 hover:text-gray-900 border border-transparent'
+                             }`}
+                           >
+                             Original Template
+                           </button>
+                           <button
+                             onClick={() => setPreviewMode('generated')}
+                             className={`text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                               previewMode === 'generated' 
+                                 ? 'bg-white text-indigo-600 shadow-sm border border-gray-200/20' 
+                                 : 'text-gray-500 hover:text-gray-900 border border-transparent'
+                             }`}
+                           >
+                             Generated Report
+                           </button>
+                         </div>
                       </div>
                       <div className="bg-white/50 rounded-[40px] border border-gray-100 overflow-hidden shadow-sm">
                         <DocPreview />

@@ -16,6 +16,8 @@ export const useStore = create<AppState>()(
       analysisProgress: 0,
       isDarkMode: false,
       highlightedFieldId: null,
+      generatedDocxBlob: null,
+      previewMode: 'original',
 
       setDocument: (doc) => {
         const initialValues: Record<string, any> = {};
@@ -26,7 +28,7 @@ export const useStore = create<AppState>()(
             }
           });
         });
-        set({ document: doc, formValues: initialValues });
+        set({ document: doc, formValues: initialValues, generatedDocxBlob: null, previewMode: 'original' });
       },
       setHighlightedField: (id) => set({ highlightedFieldId: id }),
       updateFormValue: (fieldId, value) =>
@@ -41,8 +43,10 @@ export const useStore = create<AppState>()(
       toggleDarkMode: (dark) => set((state) => ({ 
         isDarkMode: dark !== undefined ? dark : !state.isDarkMode 
       })),
-      resetAll: () => set({ document: null, formValues: {}, analysisProgress: 0 }),
+      resetAll: () => set({ document: null, formValues: {}, analysisProgress: 0, generatedDocxBlob: null, previewMode: 'original' }),
       setFormValues: (values) => set({ formValues: values }),
+      setGeneratedDocxBlob: (blob) => set({ generatedDocxBlob: blob }),
+      setPreviewMode: (mode) => set({ previewMode: mode }),
     }),
     {
       name: 'practicum-store',
