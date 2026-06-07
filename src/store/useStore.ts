@@ -46,6 +46,31 @@ export const useStore = create<AppState>()(
     }),
     {
       name: 'practicum-store',
+      storage: {
+        getItem: (name) => {
+          const val = localStorage.getItem(name);
+          if (!val || val === 'undefined') return null;
+          try {
+            return JSON.parse(val);
+          } catch {
+            return null;
+          }
+        },
+        setItem: (name, value) => {
+          try {
+            localStorage.setItem(name, JSON.stringify(value));
+          } catch (e) {
+            console.error('[ZUSTAND SETITEM ERROR]', e);
+          }
+        },
+        removeItem: (name) => {
+          try {
+            localStorage.removeItem(name);
+          } catch (e) {
+            console.error('[ZUSTAND REMOVEITEM ERROR]', e);
+          }
+        }
+      } as any,
       partialize: (state) => ({ 
         formValues: state.formValues, 
         isDarkMode: state.isDarkMode 

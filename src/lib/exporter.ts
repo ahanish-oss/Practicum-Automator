@@ -168,12 +168,19 @@ export class DocumentFiller {
     return s;
   }
 
-  private removeLeadingNumbering(text: string): string {
-    // Detects common numbering patterns: 1., 1), a., a), I., i), etc.
+  private normalizeListLine(text: string): string {
+    // Detects common numbering patterns: 1., 1), a., a), I., i), bullets, dots, stars
     return text.replace(
-      /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])\s*/i,
+      /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)]|[•\-\*·])\s*/i,
       ''
-    );
+    ).trim();
+  }
+
+  private hasAnyNumbering(p: Element): boolean {
+    const text = p.textContent || "";
+    const hasManual = /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)]|[•\-\*·])\s*/i.test(text);
+    const hasAuto = this.getElementsByTagName(p, 'numPr').length > 0;
+    return hasManual || hasAuto;
   }
 
   private fillTextSection(startIdx: number, endIdx: number, value: any, pattern?: string, placeholderIdxs?: number[]) {
@@ -181,27 +188,27 @@ export class DocumentFiller {
     
     // Parse user content into clean items
     const rawLines = text.split(/\n/g).map(l => l.trim()).filter(l => !!l);
-    const anyNumbered = rawLines.some(line => /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])\s*/i.test(line));
+    
+    // Detect if user provided manual numbering or bullets
+    const anyNumbered = rawLines.some(line => /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)]|[•\-\*·])\s*/i.test(line));
     
     const items: string[] = [];
     if (!anyNumbered) {
-      // Style B: Join all lines into a single item block to preserve original paragraph count where possible
-      const combinedLines = rawLines.join("\n");
-      if (combinedLines) items.push(combinedLines);
+      // Style B: Treat each line as a separate item (paragraph) to honor template structure
+      rawLines.forEach(line => items.push(line));
     } else {
-      // Style A: Numbering detected, group unnumbered lines with the preceding numbered line
+      // Style A: Manual numbering detected in user input, normalize and group continuations
       rawLines.forEach(line => {
-        const hasNumbering = /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])\s*/i.test(line);
+        const hasNumbering = /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)]|[•\-\*·])\s*/i.test(line);
         if (hasNumbering || items.length === 0) {
-          items.push(this.removeLeadingNumbering(line));
+          items.push(this.normalizeListLine(line)); 
         } else {
-          // Append to previous item if it's a continuation line (doesn't start with a number)
           items[items.length - 1] += "\n" + line;
         }
       });
     }
 
-    console.log(`[DETERMINISTIC EXPORT] Field Range: P[${startIdx}-${endIdx}], Item count: ${items.length}, Placeholders: ${placeholderIdxs?.length || 0}`);
+    console.log(`[DETERMINISTIC EXPORT] Field Range: P[${startIdx}-${endIdx}], Item count: ${items.length}, Numbered Input: ${anyNumbered}`);
 
     if (placeholderIdxs && placeholderIdxs.length > 0) {
       const placeholderElements = placeholderIdxs
@@ -209,54 +216,31 @@ export class DocumentFiller {
         .filter(p => !!p && !!p.parentElement);
 
       if (placeholderElements.length > 0) {
-        // Categorize placeholders: numbered anchors vs pure dots
+        // Find anchor points
         const anchors = placeholderElements.filter(p => {
-           const content = p.textContent || "";
-           return /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])/i.test(content);
+           const content = (p.textContent || "").trim();
+           return this.hasAnyNumbering(p) || (content.length > 0 && !/^[.\-_…\s]+$/.test(content));
         });
         
-        // If no numbered anchors found, treat the first block as the primary anchor
         const targetAnchors = anchors.length > 0 ? anchors : [placeholderElements[0]];
         const continuationDots = placeholderElements.filter(p => !targetAnchors.includes(p));
 
-        console.log({
-          items: items.length,
-          anchors: targetAnchors.length,
-          continuationDots: continuationDots.length
-        });
-
-        // Map items to anchors
         let insertionPoint = targetAnchors[targetAnchors.length - 1];
         items.forEach((item, i) => {
           if (i < targetAnchors.length) {
-            // Fill existing anchor
-            this.replaceParagraphContent(targetAnchors[i], item);
+            this.replaceParagraphContent(targetAnchors[i], item, anyNumbered ? i : undefined);
           } else {
-            // Append new paragraphs after the LAST injected paragraph to maintain order
+            // Clone the LAST anchor to maintain style/numbering properties
             const newP = insertionPoint.cloneNode(true) as Element;
-            this.replaceParagraphContent(newP, item);
+            this.replaceParagraphContent(newP, item, anyNumbered ? i : undefined);
             insertionPoint.parentElement!.insertBefore(newP, insertionPoint.nextSibling);
-            insertionPoint = newP; // Move the insertion point forward
+            insertionPoint = newP;
           }
         });
 
-        // CLEAN-UP: Clear any unused anchors or dots
-        if (items.length < targetAnchors.length) {
-          for (let i = items.length; i < targetAnchors.length; i++) {
-            const extraAnchor = targetAnchors[i];
-            if (extraAnchor.parentElement) {
-              console.log("REMOVING UNUSED ANCHOR:", extraAnchor.textContent);
-              extraAnchor.parentElement.removeChild(extraAnchor);
-            }
-          }
-        }
-
-        // Always remove continuation dots in the deterministic path as they clutter the output
+        // CLEAN-UP: Remove internal dots that weren't filled to avoid mess
         continuationDots.forEach(p => {
-          if (p.parentElement) {
-            console.log("REMOVING CONTINUATION DOTS:", p.textContent);
-            p.parentElement.removeChild(p);
-          }
+          if (p.parentElement) p.parentElement.removeChild(p);
         });
 
         console.log(`DETERMINISTIC REPLACE COMPLETE: Filled ${items.length} items.`);
@@ -419,7 +403,7 @@ export class DocumentFiller {
     const fullText = rTexts.map(n => n.textContent || '').join('');
     
     // Check if the template text or the paragraph as a whole has numbering
-    const hasTemplateNumbering = /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])\s*/i.test(p.textContent || "");
+    const hasTemplateNumbering = this.hasAnyNumbering(p);
     
     const newRun = oldRun.cloneNode(true) as Element;
     
@@ -448,7 +432,7 @@ export class DocumentFiller {
        }
 
        lines.forEach((line, i) => {
-          const processedLine = hasTemplateNumbering ? this.removeLeadingNumbering(line) : line;
+          const processedLine = hasTemplateNumbering ? this.normalizeListLine(line) : line;
           const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
           t.setAttribute('xml:space', 'preserve');
           t.textContent = processedLine;
@@ -467,7 +451,7 @@ export class DocumentFiller {
     } else {
        // Total replacement within the run
        lines.forEach((line, i) => {
-          const processedLine = hasTemplateNumbering ? this.removeLeadingNumbering(line) : line;
+          const processedLine = hasTemplateNumbering ? this.normalizeListLine(line) : line;
           const t = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
           t.setAttribute('xml:space', 'preserve');
           t.textContent = processedLine;
@@ -523,16 +507,15 @@ export class DocumentFiller {
     this.replaceParagraphContent(p, value);
   }
 
-  private replaceParagraphContent(p: Element, value: string) {
+  private replaceParagraphContent(p: Element, value: string, forceNumberIdx?: number) {
     // Detect numbering in template before replacement
-    const templateText = p.textContent || "";
-    const hasTemplateNumbering = /^\s*(\d+[\.\)]|[a-zA-Z][\.\)]|[IVXLCDM]+[\.\)])\s*/i.test(templateText);
+    const hasTemplateNumbering = this.hasAnyNumbering(p);
 
     // SECURITY: Ensure p is actually a paragraph node, if not find/create one
     if (p.nodeName !== 'w:p' && p.nodeName !== 'p') {
       const existingP = this.getElementsByTagName(p, 'p')[0];
       if (existingP) {
-        return this.replaceParagraphContent(existingP, value);
+        return this.replaceParagraphContent(existingP, value, forceNumberIdx);
       }
       // If we still don't have a p and this was a tc, we should have used replaceCellContent
     }
@@ -565,7 +548,19 @@ export class DocumentFiller {
     
     const lines = value.split('\n');
     lines.forEach((line, i) => {
-      const processedLine = hasTemplateNumbering ? this.removeLeadingNumbering(line) : line;
+      let processedLine = line;
+      if (hasTemplateNumbering) {
+        processedLine = this.normalizeListLine(line);
+      } else if (forceNumberIdx !== undefined) {
+        // If template has NO numbering but input was a numbered list, generate numbering
+        // For multiline items, only number the first line of the item
+        if (i === 0) {
+          processedLine = `${forceNumberIdx + 1}. ${this.normalizeListLine(line)}`;
+        } else {
+          processedLine = this.normalizeListLine(line);
+        }
+      }
+
       const newText = this.xmlDoc!.createElementNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'w:t');
       newText.setAttribute('xml:space', 'preserve');
       newText.textContent = processedLine;
@@ -589,17 +584,27 @@ export class DocumentFiller {
     }
     
     if (!Array.isArray(value)) {
-        console.error(`FILLER ERROR: Value for table ${idx} is not an array`, typeof value, value);
+        console.error(`FILLER ERROR: Value for table ${idx} is not an array. Type: ${typeof value}. Value: ${JSON.stringify(value).substring(0, 50)}...`);
         return;
     }
 
     const trs = this.getElementsByTagName(tbl, 'tr');
     if (trs.length === 0) return;
 
+    // DIAGNOSTICS FOR RESOURCE TABLE
+    console.log("[RESOURCE EXPORT]");
+    console.log("[TABLE ROW COUNT]", trs.length);
+    console.log("[FORM VALUE]", JSON.stringify(value));
+    
+    trs.forEach((row, rIdx) => {
+      const cells = this.getElementsByTagName(row, 'tc');
+      console.log("[ROW]", rIdx, "cells:", cells.length);
+    });
+
     const templateHeaders = this.getElementsByTagName(trs[0], 'tc').map(c => c.textContent?.trim() || '');
 
-    // Robustly filter data rows
-    const dataRows = value.filter(row => Array.isArray(row) && row.some(cell => cell && String(cell).trim() !== ''));
+    // Robustly filter data rows - we keep all rows including partially empty ones to maintain structure
+    const dataRows = value.filter(row => Array.isArray(row));
     
     // If the first row of values matches headers from template, skip it
     const actualDataRows = (dataRows.length > 0 && dataRows[0].every((val: any, i: number) => String(val).trim() === templateHeaders[i]))
@@ -613,26 +618,30 @@ export class DocumentFiller {
 
     console.log(`FILLER: Table ${idx} injection starting. Template Rows: ${trs.length}. New Data Rows: ${actualDataRows.length}`);
 
-    // We use the second row as a template for data if possible, else the first
-    const templateRow = trs[1] || trs[0];
-    
-    // CLEAR existing dynamic rows safely using parent approach to avoid corruption in container nodes (like SDT)
-    for (let i = trs.length - 1; i > 0; i--) {
-        const row = trs[i];
-        if (row && row.parentElement) {
-            row.parentElement.removeChild(row);
-        }
-    }
-
-    const grid = this.getElementsByTagName(tbl, 'tblGrid')[0];
-    const headerRow = trs[0];
+    // LOGIC: Use existing rows if they are available, otherwise clone the last data-row
+    // This preserves merged cells, heights, widths, and structural metadata
+    const firstDataRowIdx = 1; // Assuming row 0 is header
+    const templateRow = trs[firstDataRowIdx] || trs[0];
 
     actualDataRows.forEach((rowData: string[], rIdx: number) => {
       try {
-        const newRow = templateRow.cloneNode(true) as Element;
-        const cells = this.getElementsByTagName(newRow, 'tc');
+        const targetRowIdx = rIdx + firstDataRowIdx;
+        let tr: Element;
 
-        // Style override for visibility
+        if (targetRowIdx < trs.length) {
+          // OPTION A: REUSE EXISTING ROW
+          tr = trs[targetRowIdx];
+          console.log(`[TABLE] Reusing existing row ${targetRowIdx}`);
+        } else {
+          // OPTION B: CLONE LAST ROW (Structure maintenance)
+          tr = templateRow.cloneNode(true) as Element;
+          tbl.appendChild(tr);
+          console.log(`[TABLE] Appending cloned row for idx ${targetRowIdx}`);
+        }
+
+        const cells = this.getElementsByTagName(tr, 'tc');
+
+        // Style override for visibility (ensure no shading from template interferes with text)
         cells.forEach(cell => {
           let tcPr = this.getElementsByTagName(cell, 'tcPr')[0];
           if (!tcPr) {
@@ -655,12 +664,15 @@ export class DocumentFiller {
         rowData.forEach((cellVal, cIdx) => {
           if (cells[cIdx]) {
             const cellText = this.safeString(cellVal);
+            // Protect S.No or prefilled template text: do not overwrite it with empty strings
+            const originalCellText = (cells[cIdx].textContent || '').trim();
+            if (cellText.trim() === "" && originalCellText !== "") {
+              console.log(`[EXPORTER] Preserving original template cell value "${originalCellText}" at col ${cIdx}`);
+              return;
+            }
             this.replaceCellContent(cells[cIdx], cellText);
           }
         });
-
-        // Insert row at the end of the table
-        tbl.appendChild(newRow);
       } catch (rowErr) {
         console.error(`FILLER ERROR: Failed to inject row ${rIdx} into table ${idx}:`, rowErr);
       }

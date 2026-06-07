@@ -30,7 +30,7 @@ export interface Field {
   isDynamic?: boolean; // Can user add more rows?
   originalPattern?: string; // The pattern detected in the DOCX (e.g. ".....")
   mapping?: FieldMapping;
-  semanticRole?: 'resource' | 'procedure' | 'observation' | 'result' | 'interpretation' | 'conclusion';
+  semanticRole?: 'resource' | 'resource_table' | 'student_table' | 'procedure' | 'observation' | 'result' | 'interpretation' | 'conclusion';
   tableId?: number;
   rowId?: number;
   colId?: number;

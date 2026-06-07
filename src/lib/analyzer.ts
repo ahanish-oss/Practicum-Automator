@@ -21,6 +21,13 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     return Array.from(parent.getElementsByTagName(tagName));
   };
 
+  const getDirectChildrenByTagName = (parent: Element, tagName: string): Element[] => {
+    return Array.from(parent.childNodes).filter(child => {
+      const name = child.nodeName;
+      return name === tagName || name === `w:${tagName}`;
+    }) as Element[];
+  };
+
   const body = getElementsByTagName(xmlDoc, 'body')[0];
   
   if (!body) {
@@ -51,10 +58,12 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
       'procedure', 'actual procedure followed', 'methodology', 
       'steps', 'implementation', 'algorithm'
     ];
+    const observationKeywords = [
+      'observation', 'observations'
+    ];
     const resultsKeywords = [
       'results', 'result', 'outcome', 'findings', 
-      'observation', 'observations', 'results observations',
-      'results/observations'
+      'results observations', 'results/observations'
     ];
     const interpretationKeywords = [
       'interpretation',
@@ -70,6 +79,9 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
       'conclusions',
       'students to draw conclusions',
       'draw conclusions',
+      'take decisions',
+      'take decision',
+      'learners to draw conclusions',
       'final remarks',
       'summary'
     ];
@@ -77,12 +89,18 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
       'actual resources used', 'actual resources', 'materials used', 
       'tools used', 'resources used'
     ];
+    const studentInfoKeywords = [
+      'filled by student', 'student information', 'student details', 'identity',
+      'to be filled by student', 'to be filled by the student'
+    ];
 
     if (procedureKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'procedure';
+    if (observationKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'observation';
     if (resultsKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'result';
     if (interpretationKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'interpretation';
     if (conclusionKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'conclusion';
-    if (resourceKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'resource';
+    if (resourceKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'resource_table';
+    if (studentInfoKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'student_table';
     return undefined;
   };
 
@@ -93,9 +111,14 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
       'references', 'suggested reading', 'further reading', 'assessment scheme', 
       'competency', 'outcomes', 'performance indicators', 'marks obtained',
       'faculty member', 'minimum underpinning theory', 'suggested resources',
-      'practicum related questions'
+      'practicum related questions', 'practical outcome', 'procedure',
+      'relevant co', 'related ado', 'assessment'
     ];
     
+    // Specifically protect "Actual" and "Resources Required" sections
+    const lowerTitle = title.toLowerCase();
+    if (lowerTitle.includes('actual') || lowerTitle.includes('resources required')) return false;
+
     let result = false;
     if (normalized.includes('questions') && (normalized.includes('suggested') || normalized.includes('practicum'))) result = true;
     else result = keywords.some(k => normalized === k || normalized.includes(k));
@@ -112,9 +135,17 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
   const isStudentFillableTitle = (title: string): boolean => {
     const normalized = normalizeTitle(title);
+    const lowerTitle = title.toLowerCase();
+
+    // Explicitly protect the "Must Never Be Filtered" list
+    const mandatoryKeywords = [
+      "actual resources", "actual procedure", "observations", 
+      "results", "interpretation", "conclusion", "filled by student",
+      "resources required", "student details", "student information",
+      "draw conclusions", "take decisions", "take decision", "learners to draw conclusions"
+    ];
     
-    // Explicitly prioritize core student-fillable sections
-    if (normalized.includes('interpretation') || normalized.includes('conclusion')) {
+    if (mandatoryKeywords.some(mk => lowerTitle.includes(mk))) {
       return true;
     }
 
@@ -137,16 +168,25 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     );
   };
 
-  // Get all structural elements with their context
-  const structuralElements = Array.from(body.childNodes).filter(node => 
-    node.nodeName === 'w:p' || node.nodeName === 'w:tbl'
-  );
+  // Deeply collect structural elements (p, tbl) while preserving order
+  const getAllStructuralElements = (node: Node): Node[] => {
+    let results: Node[] = [];
+    node.childNodes.forEach(child => {
+      if (child.nodeName === 'w:p' || child.nodeName === 'w:tbl') {
+        results.push(child);
+      } else if (child.hasChildNodes() && child.nodeName !== 'w:p' && child.nodeName !== 'w:tbl' && child.nodeName !== 'w:r' && child.nodeName !== 'w:t') {
+        results = results.concat(getAllStructuralElements(child));
+      }
+    });
+    return results;
+  };
+
+  const structuralElements = getAllStructuralElements(body);
 
   const paragraphs = getElementsByTagName(body, 'p');
   const tables = getElementsByTagName(body, 'tbl');
   const processedNodeIndices = new Set<number>();
-
-  let lastSectionHeaderIndex = -1;
+  const detectedFillableRoles = new Set<string>();
 
   const headerFields: Field[] = [];
   let isInStaticContent = false;
@@ -158,6 +198,13 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     "Performance Indicators",
     "To be filled by the Faculty Member"
   ];
+
+  currentSection = {
+    id: 'root',
+    title: 'General Information',
+    content: '',
+    fields: []
+  };
 
   structuralElements.forEach((node, index) => {
     if (processedNodeIndices.has(index)) return;
@@ -187,16 +234,19 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
     // Standalone Date Field Detection
     if (node.nodeName === 'w:p') {
-      const dateMatch = text.match(/Date\s*:\s*([.\-_…]{2,})/i);
-      if (dateMatch) {
+      // Improved Date detection: check for "Date" keyword followed by any placeholder pattern
+      const dateMatch = text.match(/Date\s*[:\s]+.*([.\-_…]{2,})/i);
+      const hasDateKeyword = text.toLowerCase().includes('date');
+      const hasPlaceholders = containsPlaceholder(text);
+      if (dateMatch || (hasDateKeyword && hasPlaceholders)) {
           const pIdx = paragraphs.indexOf(node as any);
-          const pattern = dateMatch[1];
+          const pattern = dateMatch ? dateMatch[1] : (text.match(/[.\-_…]{2,}/)?.[0] || '...');
           console.log("DATE FIELD DETECTED", {
             paragraph: pIdx,
             text
           });
           headerFields.push({
-            id: "date-field", // Use shared ID for multiple date fields to sync values in UI
+            id: "date-field", 
             label: "Date",
             type: "text",
             sectionId: "document-header",
@@ -208,7 +258,7 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
               endParagraph: pIdx
             }
           });
-          return; // Skip further processing for this paragraph
+          return;
       }
     }
 
@@ -225,160 +275,260 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
         "conclusions",
         "results/observations",
         "observations",
-        "actual procedure"
+        "actual procedure",
+        "actual resources",
+        "actual resources used",
+        "equipment",
+        "materials used",
+        "filled by student",
+        "filled by the student",
+        "student details",
+        "student information"
       ];
       const isForcedHeader = forceHeaderKeywords.some(k => normalizedTitle.includes(k));
       
-      const isHeader = (
-        (
-          isStudentFillableTitle(text) || 
-          isExcluded(text) ||
-          isFacultyAssessment(text) ||
-          isRomanHeader
-        ) && (!containsPlaceholder(text) || isForcedHeader)
-      ) && text.length < 500 && text.length > 2;
+      const isHeaderCandidate = (
+        isStudentFillableTitle(text) || 
+        isExcluded(text) ||
+        isFacultyAssessment(text) ||
+        isRomanHeader
+      );
 
-      if (isHeader) {
-        console.log("HEADER DETECTED:", { 
-          text: text.substring(0, 100), 
-          isRomanHeader, 
-          normalizedTitle,
-          isStudentFillable: isStudentFillableTitle(text), 
-          isExcluded: isExcluded(text),
-          isForcedHeader,
-          containsPlaceholder: containsPlaceholder(text),
-          length: text.length
-        });
+      if (isHeaderCandidate && text.length < 500 && text.length > 2 && (!containsPlaceholder(text) || isForcedHeader)) {
         let intent: Section['intent'] = 'template-static';
-        // Priority: Student Fillable > Faculty Evaluation > Excluded
-        if (isStudentFillableTitle(text)) intent = 'student-fillable';
-        else if (isFacultyAssessment(text)) intent = 'faculty-evaluation';
-        else if (isExcluded(text)) intent = 'template-static';
+        const role = getSectionRole(normalizedTitle);
 
-        // Finalize previous section range
-        if (currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation') {
-          currentSection.fields.forEach(f => {
-            if (f.mapping?.type === 'paragraph' && f.mapping.endParagraph === undefined) {
-              // Find the last paragraph index before this header
-              let lastPIdx = -1;
-              for (let i = index - 1; i >= 0; i--) {
-                if (structuralElements[i].nodeName === 'w:p') {
-                  lastPIdx = paragraphs.indexOf(structuralElements[i] as any);
-                  break;
-                }
-              }
-              f.mapping.endParagraph = lastPIdx >= 0 ? lastPIdx : paragraphs.indexOf(structuralElements[index] as any) - 1;
-            }
+        // PREVENT DUPLICATE SECTIONS: If we already have a fillable section of this type,
+        // and this one looks like a "content" sentence starting with the keyword, reject it.
+        if (role && detectedFillableRoles.has(role) && text.includes(':') && text.split(' ').length > 6) {
+           console.log("[ANALYZER] Rejecting suspected duplicate/content section:", text);
+        } else {
+          // Priority: Student Fillable > Faculty Evaluation > Excluded
+          if (isStudentFillableTitle(text)) {
+            intent = 'student-fillable';
+            if (role) detectedFillableRoles.add(role);
+          }
+          else if (isFacultyAssessment(text)) intent = 'faculty-evaluation';
+          else if (isExcluded(text)) intent = 'template-static';
+
+          console.log("HEADER DETECTED:", { 
+            text: text.substring(0, 100), 
+            isRomanHeader, 
+            normalizedTitle,
+            intent,
+            isForcedHeader
           });
+
+          // Finalize previous section range
+          if (currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation') {
+            currentSection.fields.forEach(f => {
+              if (f.mapping?.type === 'paragraph' && f.mapping.endParagraph === undefined) {
+                let lastPIdx = -1;
+                for (let i = index - 1; i >= 0; i--) {
+                  if (structuralElements[i].nodeName === 'w:p') {
+                    lastPIdx = paragraphs.indexOf(structuralElements[i] as any);
+                    break;
+                  }
+                }
+                f.mapping.endParagraph = lastPIdx >= 0 ? lastPIdx : paragraphs.indexOf(structuralElements[index] as any) - 1;
+              }
+            });
+          }
+
+          if (currentSection.fields.length > 0 || currentSection.id !== 'root') {
+            sections.push({ ...currentSection, content: currentSection.content.trim() });
+          }
+
+          const rawTitle = text.replace(/[.\-_…]{3,}/g, '').trim();
+          const titleMatch = rawTitle.match(/^(.+?)\s*\((.+)\)\s*$/);
+          let finalTitle = rawTitle;
+          let description = "";
+          if (titleMatch) {
+            finalTitle = titleMatch[1].trim();
+            description = titleMatch[2].trim();
+          }
+
+          const hPIdx = paragraphs.indexOf(node as any);
+
+          currentSection = {
+            id: `section-${index}`,
+            title: finalTitle,
+            description: description,
+            headerParagraphIndex: hPIdx,
+            content: '',
+            fields: [],
+            intent
+          };
+
+          const normalizedCurrentTitle = normalizeTitle(currentSection.title);
+          const isStudentSection = 
+            normalizedCurrentTitle.includes("filled by student") ||
+            normalizedCurrentTitle.includes("student details") ||
+            normalizedCurrentTitle.includes("student information");
+
+          if (isStudentSection) {
+            console.log(
+              "[STUDENT SECTION CREATED]",
+              currentSection.title
+            );
+          }
+          return;
         }
-
-        if (currentSection.fields.length > 0 || currentSection.id !== 'root') {
-          console.log('[SECTION-Pushed]', currentSection.title, 'FIELDS:', currentSection.fields.length);
-          sections.push({ ...currentSection, content: currentSection.content.trim() });
-        }
-
-        const rawTitle = text.replace(/[.\-_…]{3,}/g, '').trim();
-        const titleMatch = rawTitle.match(/^(.+?)\s*\((.+)\)\s*$/);
-        let finalTitle = rawTitle;
-        let description = "";
-        if (titleMatch) {
-          finalTitle = titleMatch[1].trim();
-          description = titleMatch[2].trim();
-        }
-
-        const hPIdx = paragraphs.indexOf(node as any);
-
-        currentSection = {
-          id: `section-${index}`,
-          title: finalTitle,
-          description: description,
-          headerParagraphIndex: hPIdx,
-          content: '',
-          fields: [],
-          intent
-        };
-        lastSectionHeaderIndex = index;
-        return;
       }
     }
 
-    // Process content within the current section based on its intent
-    if (currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation') {
-      const normalizedSectionTitle = normalizeTitle(currentSection.title);
-      const role = getSectionRole(normalizedSectionTitle);
+    // Process Content
+    if (node.nodeName === 'w:tbl') {
+      const tableIdx = tables.indexOf(node as any);
+      // Use direct children for rows to avoid issues with nested tables
+      const trs = getDirectChildrenByTagName(node as Element, 'tr');
       
-      console.log(`ANALYZER: Processing [${node.nodeName}] in section [${currentSection.title}] (Role: ${role})`);
-
-      // CASE A: TABLE SECTIONS
-      if (node.nodeName === 'w:tbl') {
-        const tableIdx = tables.indexOf(node as any);
-        const trs = getElementsByTagName(node as any, 'tr');
+      if (trs.length > 0) {
+        // Look for the first row specifically for headers
+        const firstRowCells = getDirectChildrenByTagName(trs[0], 'tc');
+        const headers = firstRowCells.map(c => (c.textContent || '').trim());
         
-        if (trs.length > 0) {
-          const headerCells = getElementsByTagName(trs[0], 'tc');
-          const headers = headerCells.map(c => c.textContent?.trim() || '');
-          
-          // Identify label columns (usually first 1 or 2)
-          const metadataKeywords = [
-            's.no', 's no', 'serial no', 'serial number', 
-            'sl.no', 'sl no', '#', 'no'
-          ];
-          
+        const entireTableText = (node.textContent || "").toLowerCase();
+
+        const isStudentTableByContent =
+          entireTableText.includes("name of the student") &&
+          (
+            entireTableText.includes("register no") ||
+            entireTableText.includes("register")
+          );
+
+        if (entireTableText.includes("student")) {
+          console.log(
+            "[POSSIBLE STUDENT TABLE]",
+            entireTableText
+          );
+        }
+        
+        console.log(`[ANALYZER-TABLE] Processing table ${tableIdx} with ${trs.length} rows. Headers:`, headers);
+
+        // Identify label columns (usually first 1 or 2)
+        const metadataKeywords = [
+          's.no', 's no', 'serial no', 'serial number', 
+          'sl.no', 'sl no', '#', 'no', 'sr. no', 'sr no', 's.no.'
+        ];
+        
           const labelColIndices = headers.map((h, j) => {
             const hj = h.toLowerCase().trim();
-            if (metadataKeywords.some(mw => hj === mw || (hj.includes(mw) && hj.length < 5))) return j;
+            // Match keywords exactly or as clear prefixes like "s.no." or "no."
+            if (metadataKeywords.some(mw => hj === mw || hj.startsWith(mw + '.') || hj.startsWith(mw + ' ') || (hj.includes(mw) && hj.length <= 6))) return j;
             return -1;
           }).filter(j => j !== -1);
 
-          // If no obvious label column, default to the first one as a fallback for row identification
-          const finalLabelColIndices = labelColIndices.length > 0 ? labelColIndices : [0];
+        const finalLabelColIndices = labelColIndices.length > 0 ? labelColIndices : [0];
+        
+        const studentInputKeywords = [
+          'name', 'student', 'register', 'roll', 'id', 'version', 
+          'configuration', 'remarks', 'quantity', 'output', 'result', 
+          'observation', 'value', 'actual', 'specification', 'comments',
+          'registration', 'enrollment', 'batch', 'sem', 'resource', 'equipment', 'date'
+        ];
+
+        const isCurrentlyFillable = currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation';
+        const tableRows: NonNullable<Field['tableRows']> = [];
+        let hasAnyEditableCell = false;
+
+        trs.forEach((tr, rIdx) => {
+          const cells = getDirectChildrenByTagName(tr, 'tc');
+          const trPr = tr.getElementsByTagName('w:trPr')[0];
+          const isWordHeader = trPr && trPr.getElementsByTagName('w:tblHeader').length > 0;
           
-          const studentInputKeywords = [
-            'name', 'student', 'register', 'roll', 'id', 'version', 
-            'configuration', 'remarks', 'quantity', 'output', 'result', 
-            'observation', 'value', 'actual', 'specification', 'comments'
-          ];
+          const row: typeof tableRows[0] = {
+            // Strictly row 0 is header. Only allow subsequent rows as headers if they are explicitly marked AND it's not a tiny table
+            isHeader: rIdx === 0 || (!!isWordHeader && trs.length > 3), 
+            cells: cells.map((cell, cIdx) => {
+              const headerName = headers[cIdx] || `Column ${cIdx + 1}`;
+              const hl = headerName.toLowerCase();
+              const cellText = (cell.textContent || '').trim();
+              
+              const isFillableHeader = studentInputKeywords.some(sk => hl.includes(sk));
+              const isCellBlank = cellText === '';
+              const isPlaceholder = containsPlaceholder(cellText);
+              const isMetadata = finalLabelColIndices.includes(cIdx);
+              
+              // In student-fillable sections, we are more lenient with what we consider editable
+              // Basically if it's not metadata and looks like it needs filling (blank or placeholder)
+              // We also allow it even if isWordHeader is true for the first data row if headers match
+              const isEditable = !isMetadata && (isFillableHeader || isCellBlank || isPlaceholder || isCurrentlyFillable);
+              
+              if (isEditable && rIdx > 0) hasAnyEditableCell = true;
 
-          const tableRows: NonNullable<Field['tableRows']> = [];
+              return {
+                text: cellText,
+                columnHeader: headerName,
+                isEditable
+              };
+            })
+          };
+          tableRows.push(row);
+        });
 
-          trs.forEach((tr, rIdx) => {
-            const cells = getElementsByTagName(tr, 'tc');
-            const row: typeof tableRows[0] = {
-              isHeader: rIdx === 0,
-              cells: cells.map((cell, cIdx) => {
-                const headerName = headers[cIdx] || `Column ${cIdx + 1}`;
-                const hl = headerName.toLowerCase();
-                const cellText = cell.textContent?.trim() || '';
-                
-                const isFillableHeader = studentInputKeywords.some(sk => hl.includes(sk));
-                const isCellBlank = cellText === '';
-                const isMetadata = finalLabelColIndices.includes(cIdx);
-                const isEditable = !isMetadata && (isFillableHeader || isCellBlank);
-                
-                if (rIdx === 0) {
-                  console.log({
-                    header: headerName,
-                    isMetadata,
-                    isEditable: isFillableHeader // Potential to be editable in rows
-                  });
-                }
-                
-                return {
-                  text: cellText,
-                  columnHeader: headerName,
-                  isEditable
-                };
-              })
-            };
-            tableRows.push(row);
+        const role = getSectionRole(normalizeTitle(currentSection.title));
+        
+        if (role === 'resource_table') {
+          console.log("[RESOURCE TABLE ROWS]", tableRows.length);
+          console.log("[RESOURCE TABLE DATA]", JSON.stringify(tableRows));
+        }
+
+        const headersText = headers.join(" ").toLowerCase();
+
+        console.log(
+  "[ALL TABLE HEADERS]",
+  headers
+);
+
+        const isStudentTable =
+          (
+            headersText.includes("student") ||
+            headersText.includes("name of the student") ||
+            headersText.includes("student name")
+          ) &&
+          (
+            headersText.includes("register") ||
+            headersText.includes("register no") ||
+            headersText.includes("reg no") ||
+            headersText.includes("roll no") ||
+            headersText.includes("roll number")
+          );
+
+        if (
+          hasAnyEditableCell ||
+          isCurrentlyFillable ||
+          isStudentTable ||
+          isStudentTableByContent
+        ) {
+          if (isStudentTable || isStudentTableByContent) {
+            console.log(
+              "[STUDENT TABLE DETECTED]",
+              headers
+            );
+          }
+
+          console.log("[TABLE FOUND]", currentSection.title, {
+            rows: tableRows.length,
+            headers,
+            fieldsCreated: currentSection.fields.length + 1
           });
 
+          let finalRole = role;
+          let finalLabel = role === 'resource_table' ? 'Equipment & Softwares' : 'Data Table';
+
+          if (isStudentTable || isStudentTableByContent) {
+            finalRole = 'student_table';
+            finalLabel = 'Student Details';
+          }
+
+          console.log("[TABLE SAVED]", currentSection.title, "Rows:", tableRows.length, "Role:", finalRole);
           currentSection.fields.push({
             id: `table_${tableIdx}`,
-            label: role === 'resource' ? 'Equipment & Softwares' : 'Data Table',
+            label: finalLabel,
             type: 'table',
             sectionId: currentSection.id,
-            semanticRole: role,
+            semanticRole: finalRole,
             headers,
             tableRows,
             defaultValue: tableRows.map(row => row.cells.map(cell => cell.text)),
@@ -388,34 +538,31 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
             }
           });
 
-          console.log(`ANALYZER: Added table field table_${tableIdx} with ${tableRows.length} rows`);
+          if (isStudentTable || isStudentTableByContent) {
+            console.log(
+              "[STUDENT TABLE SAVED]",
+              currentSection.title
+            );
+          }
         }
-        return;
       }
+      return;
+    }
 
-      // CASE B: PARAGRAPH SECTIONS (Procedure, Results, Conclusion, Interpretation, Comments)
+    if (currentSection.intent === 'student-fillable' || currentSection.intent === 'faculty-evaluation') {
+      const normalizedSectionTitle = normalizeTitle(currentSection.title);
+      const role = getSectionRole(normalizedSectionTitle);
+
       if (node.nodeName === 'w:p') {
         const pIdx = paragraphs.indexOf(node as any);
-        // Improved Placeholder Detection regex per requirements
         const hasPlaceholder = containsPlaceholder(text);
         const isDotsOnly = /^[\s\.\-_…]+$/.test(text);
         const numberingMatch = text.match(/^(\s*\d+[\.\)]|\s*[a-zA-Z][\.\)]|\s*●|\s*-)\s*(.*)$/);
         
-        console.log({
-          section: currentSection.title,
-          paragraph: pIdx,
-          text: text.substring(0, 30),
-          containsPlaceholder: hasPlaceholder
-        });
-
-        // Check if we are currently finishing a range
         const lastField = currentSection.fields[currentSection.fields.length - 1];
         const isContinuingRange = lastField && lastField.mapping?.type === 'paragraph' && lastField.mapping.endParagraph === undefined;
 
-        // Numbered response area detection: 1. .......
-        const isNumberedPlaceholder = numberingMatch && hasPlaceholder;
-
-        if (isNumberedPlaceholder) {
+        if (numberingMatch && hasPlaceholder) {
           if (isContinuingRange && lastField) {
             lastField.mapping!.endParagraph = pIdx - 1;
           }
@@ -433,13 +580,11 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
               placeholderParagraphs: [pIdx]
             }
           });
-          console.log(`ANALYZER: Split detected - New numbered placeholder at P[${pIdx}]`);
           return;
         }
 
         if (hasPlaceholder) {
           if (!isContinuingRange) {
-             // New standalone dots field
              currentSection.fields.push({
                id: `para-${pIdx}`,
                label: currentSection.title,
@@ -453,18 +598,13 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
                  placeholderParagraphs: [pIdx]
                }
              });
-             console.log(`ANALYZER: New placeholder block started at P[${pIdx}]`);
           } else if (isDotsOnly) {
-             // Dotted line continuation - explicitly logging context
              if (lastField.mapping?.placeholderParagraphs) {
                lastField.mapping.placeholderParagraphs.push(pIdx);
              }
-             console.log(`ANALYZER: Extending field [${lastField.label}] with dots at P[${pIdx}]`);
           }
         } else if (text !== '' && isContinuingRange) {
-          // Non-empty, non-placeholder text ends the current block
           lastField.mapping!.endParagraph = pIdx - 1;
-          console.log(`ANALYZER: Finalized field [${lastField.label}] at P[${pIdx-1}] due to static text`);
         }
         return;
       }
@@ -544,6 +684,16 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
         shouldKeep = false;
         reason = 'No fillable signals (no dots/instructions) and no semantic role matches';
       }
+
+      const isStudentIdentitySection =
+        normalizedTitle.includes("filled by student") ||
+        normalizedTitle.includes("student details") ||
+        normalizedTitle.includes("student information");
+
+      if (isStudentIdentitySection) {
+        shouldKeep = true;
+        reason = 'Forced student identity section';
+      }
       
       console.log(`[FILTER DECISION] Section: "${s.title}"`);
       console.log(`  - Normalized: "${normalizedTitle}"`);
@@ -554,6 +704,16 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
       console.log(`  - Placeholders: ${hasPlaceholders}`);
       console.log(`  - Excluded: ${isActuallyExcluded}`);
       console.log(`  -> KEPT: ${shouldKeep} | REASON: ${reason}`);
+
+      if (isStudentIdentitySection || s.title.toLowerCase().includes("student")) {
+        console.log(
+          "[FILTER CHECK STUDENT]",
+          {
+            title: s.title,
+            kept: shouldKeep
+          }
+        );
+      }
 
       if (!shouldKeep) {
          console.log(`  - Content preview (first 200 chars): ${s.content.substring(0, 200).replace(/\n/g, '\\n')}...`);
@@ -605,6 +765,47 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
 
   console.log("AFTER FILTER SECTIONS:", finalizedSections.map(s => s.title));
 
+  console.log(
+  "[FINALIZED SECTIONS]",
+  JSON.stringify(
+    finalizedSections.map(s => ({
+      title: s.title,
+      fields: s.fields.map(f => ({
+        label: f.label,
+        role: f.semanticRole,
+        type: f.type
+      }))
+    })),
+    null,
+    2
+  )
+);
+
+console.log(
+  "[FINAL ANALYZER OUTPUT]",
+  finalizedSections.map(section => ({
+    title: section.title,
+    fields: section.fields.map(field => ({
+      id: field.id,
+      label: field.label,
+      role: field.semanticRole,
+      type: field.type
+    }))
+  }))
+);
+
+alert("ANALYZER FINISHED");
+console.log("ANALYZER FINISHED");
+
+console.log(
+  "ALL ROLES",
+  finalizedSections.flatMap(s =>
+    s.fields.map(f => ({
+      label: f.label,
+      role: f.semanticRole
+    }))
+  )
+);
   return { sections: finalizedSections, html: result.value };
 };
 
