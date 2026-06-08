@@ -5,13 +5,25 @@ import { DynamicForm } from './components/DynamicForm';
 import { DocPreview } from './components/DocPreview';
 import { DraftsPanel } from './components/DraftsPanel';
 import { AnalysisProgress } from './components/AnalysisProgress';
+import { LandingPage } from './components/LandingPage';
+import { AuthModal } from './components/AuthModal';
+import { HistoryPanel } from './components/HistoryPanel';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { FileText, Download, RotateCcw, CheckCircle2, History, Eye, Loader2 } from 'lucide-react';
+import { FileText, Download, RotateCcw, CheckCircle2, History, Eye, Loader2, LogOut, User, Clock } from 'lucide-react';
 import { exportDocx, generateDocxBlob } from './lib/exporter';
 import { db } from './lib/db';
 import { motion, AnimatePresence } from 'framer-motion';
 import { saveAs } from 'file-saver';
+import { 
+  getCurrentUser, 
+  loginUser, 
+  createUser, 
+  logoutUser, 
+  saveDocumentHistory,
+  type User as AuthUser,
+  type DocumentHistory
+} from './lib/auth';
 
 export default function App() {
   const { 
@@ -22,15 +34,40 @@ export default function App() {
     generatedDocxBlob,
     previewMode,
     setGeneratedDocxBlob,
-    setPreviewMode
+    setPreviewMode,
+    setDocument,
+    setFormValues
   } = useStore();
 
   const [showDrafts, setShowDrafts] = useState(false);
   const [isConvertingPdf, setIsConvertingPdf] = useState(false);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [showAuth, setShowAuth] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [showLanding, setShowLanding] = useState(true);
+  const [showHistory, setShowHistory] = useState(false);
+
+  // Check for existing user session on mount
+  useEffect(() => {
+    const user = getCurrentUser();
+    if (user) {
+      setCurrentUser(user);
+      setShowLanding(false);
+    }
+  }, []);
 
   const handleSaveDraft = async () => {
-    if (!appDocument) return;
+    if (!appDocument || !currentUser) return;
     await db.saveDraft(appDocument.name, formValues);
+    
+    // Save to user's history
+    saveDocumentHistory(
+      currentUser.id,
+      appDocument.name,
+      formValues,
+      appDocument.sections
+    );
+    
     setShowDrafts(true);
   };
 
@@ -88,8 +125,16 @@ export default function App() {
 
   const handleGenerateReport = async () => {
     const blob = await validateAndGenerateBlob();
-    if (blob) {
+    if (blob && appDocument && currentUser) {
       downloadFile(blob, `Filled_${appDocument.name}`);
+      
+      // Save to history after successful generation
+      saveDocumentHistory(
+        currentUser.id,
+        appDocument.name,
+        formValues,
+        appDocument.sections
+      );
     }
   };
 
@@ -158,6 +203,110 @@ export default function App() {
     }
   };
 
+  const handleAuth = (email: string, password: string, name?: string) => {
+    try {
+      let user: AuthUser;
+      if (authMode === 'signup') {
+        user = createUser(email, password, name!);
+      } else {
+        user = loginUser(email, password);
+      }
+      setCurrentUser(user);
+      setShowAuth(false);
+      setShowLanding(false);
+    } catch (error) {
+      alert((error as Error).message);
+    }
+  };
+
+  const handleLogout = () => {
+    if (confirm('Are you sure you want to log out?')) {
+      logoutUser();
+      setCurrentUser(null);
+      resetAll();
+      setShowLanding(true);
+    }
+  };
+
+  const handleGetStarted = () => {
+    setShowAuth(true);
+    setAuthMode('signup');
+  };
+
+  const handleLoadHistory = (entry: DocumentHistory) => {
+    // Reconstruct document from history
+    const doc = {
+      name: entry.documentName,
+      type: 'docx' as const,
+      originalContent: '',
+      sections: entry.sections,
+      stats: {
+        sectionCount: entry.sections.length,
+        fieldCount: entry.sections.reduce((acc, s) => acc + s.fields.length, 0),
+        completionPercentage: 100
+      }
+    };
+    setDocument(doc);
+    setFormValues(entry.formValues);
+    setShowHistory(false);
+  };
+
+  // Show landing page if not authenticated
+  if (showLanding || !currentUser) {
+    return (
+      <>
+        <div className="min-h-screen flex flex-col bg-white">
+          {/* Auth Header */}
+          <header className="absolute top-0 left-0 right-0 z-10 py-6 px-8">
+            <div className="max-w-7xl mx-auto flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-100/50">
+                  <FileText className="w-5 h-5 text-white" />
+                </div>
+                <div className="flex flex-col">
+                  <h1 className="text-[13px] font-semibold text-gray-900 tracking-tight">Practicum Intelligence</h1>
+                  <span className="text-[11px] text-gray-400 font-medium">Document Automation</span>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setShowAuth(true);
+                  }}
+                  className="text-gray-600 hover:text-gray-900 font-semibold"
+                >
+                  Login
+                </Button>
+                <Button
+                  onClick={() => {
+                    setAuthMode('signup');
+                    setShowAuth(true);
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 rounded-xl font-semibold shadow-lg shadow-indigo-200"
+                >
+                  Sign Up
+                </Button>
+              </div>
+            </div>
+          </header>
+
+          <LandingPage onGetStarted={handleGetStarted} />
+        </div>
+
+        <AuthModal
+          isOpen={showAuth}
+          onClose={() => setShowAuth(false)}
+          mode={authMode}
+          onSwitch={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+          onAuth={handleAuth}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-[#fafafb]">
       {/* Header */}
@@ -187,6 +336,33 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* User Menu */}
+            <div className="flex items-center gap-3 pr-3 border-r border-gray-100">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowHistory(true)}
+                className="gap-2 text-[11px] font-medium text-gray-500 hover:text-indigo-600"
+              >
+                <Clock className="w-4 h-4" />
+                History
+              </Button>
+              <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-xl">
+                <div className="w-7 h-7 bg-indigo-100 rounded-lg flex items-center justify-center">
+                  <User className="w-4 h-4 text-indigo-600" />
+                </div>
+                <span className="text-xs font-semibold text-gray-700">{currentUser.name}</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleLogout}
+                className="text-gray-400 hover:text-red-500 w-9 h-9 p-0"
+              >
+                <LogOut className="w-4 h-4" />
+              </Button>
+            </div>
+
             {appDocument && (
               <>
                 <Button 
@@ -380,6 +556,23 @@ export default function App() {
           </AnimatePresence>
         </div>
       </main>
+
+      {/* History Panel */}
+      <HistoryPanel
+        isOpen={showHistory}
+        onClose={() => setShowHistory(false)}
+        userId={currentUser.id}
+        onLoadHistory={handleLoadHistory}
+      />
+
+      {/* Auth Modal */}
+      <AuthModal
+        isOpen={showAuth}
+        onClose={() => setShowAuth(false)}
+        mode={authMode}
+        onSwitch={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+        onAuth={handleAuth}
+      />
     </div>
   );
 }
