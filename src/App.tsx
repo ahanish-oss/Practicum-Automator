@@ -46,6 +46,8 @@ export default function App() {
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [showLanding, setShowLanding] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
+  const [studentName, setStudentName] = useState('');
+  const [registerNo, setRegisterNo] = useState('');
 
   // Check for existing user session on mount
   useEffect(() => {
@@ -324,13 +326,23 @@ export default function App() {
             </div>
             
             {appDocument && (
-              <div className="flex items-center gap-3 pl-6 border-l border-gray-100">
-                <span className="text-xs font-medium text-gray-500 line-clamp-1 max-w-[200px]">
-                  {appDocument.name}
-                </span>
-                <Badge variant="secondary" className="bg-indigo-50 text-indigo-600 border-none px-2 py-0.5 text-[10px] font-semibold">
-                  Processed
-                </Badge>
+              <div className="flex items-center gap-4 pl-6 border-l border-gray-100">
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    value={studentName}
+                    onChange={(e) => setStudentName(e.target.value)}
+                    placeholder="Student Name"
+                    className="text-xs font-medium text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all w-48"
+                  />
+                  <input
+                    type="text"
+                    value={registerNo}
+                    onChange={(e) => setRegisterNo(e.target.value)}
+                    placeholder="Register No."
+                    className="text-xs font-medium text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all w-40"
+                  />
+                </div>
               </div>
             )}
           </div>
@@ -475,12 +487,7 @@ export default function App() {
                   <>
                     {/* Document View */}
                     <div className="space-y-6">
-                      <div className="flex items-center justify-between px-2">
-                         <div className="flex items-center gap-2">
-                            <CheckCircle2 className="w-4 h-4 text-indigo-500" />
-                            <h3 className="text-[11px] font-bold text-gray-400 tracking-wider uppercase">High-Fidelity Preview</h3>
-                         </div>
-                         
+                      <div className="flex items-center justify-end px-2">
                          {/* Toggle Tabs for Original vs Generated Preview */}
                          <div className="flex items-center gap-1 bg-gray-100/80 p-1 rounded-xl border border-gray-200/50">
                            <button
