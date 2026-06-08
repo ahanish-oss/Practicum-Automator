@@ -199,6 +199,10 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     "To be filled by the Faculty Member"
   ];
 
+  // Track if we've seen faculty/student sections to avoid duplicates
+  let hasDetectedFacultyFields = false;
+  let hasDetectedStudentFields = false;
+
   currentSection = {
     id: 'root',
     title: 'General Information',
@@ -236,9 +240,11 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     if (node.nodeName === 'w:p') {
       // Improved Date detection: check for "Date" keyword followed by any placeholder pattern
       const dateMatch = text.match(/Date\s*[:\s]+.*([.\-_…]{2,})/i);
-      const hasDateKeyword = text.toLowerCase().includes('date');
+      const hasDateKeyword = /date/i.test(text);
       const hasPlaceholders = containsPlaceholder(text);
-      if (dateMatch || (hasDateKeyword && hasPlaceholders)) {
+      const isShortLine = text.length < 100; // Date lines are typically short
+      
+      if (dateMatch || (hasDateKeyword && hasPlaceholders && isShortLine)) {
           const pIdx = paragraphs.indexOf(node as any);
           const pattern = dateMatch ? dateMatch[1] : (text.match(/[.\-_…]{2,}/)?.[0] || '...');
           console.log("DATE FIELD DETECTED", {
@@ -249,6 +255,7 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
             id: "date-field", 
             label: "Date",
             type: "text",
+            placeholder: "DD/MM/YYYY",
             sectionId: "document-header",
             semanticRole: undefined,
             originalPattern: pattern,
@@ -259,6 +266,205 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
             }
           });
           return;
+      }
+    }
+
+    // Faculty Name Detection
+    if (node.nodeName === 'w:p' && !hasDetectedFacultyFields) {
+      const lowerText = text.toLowerCase();
+      const isFacultySection = 
+        lowerText.includes('to be filled by the faculty') ||
+        lowerText.includes('to be filled by faculty') ||
+        lowerText.includes('faculty member');
+      
+      if (isFacultySection) {
+        console.log("[FACULTY SECTION DETECTED]", text);
+        hasDetectedFacultyFields = true;
+        
+        // Check next few paragraphs/tables for faculty fields
+        const nextElements = structuralElements.slice(index + 1, Math.min(index + 10, structuralElements.length));
+        
+        nextElements.forEach((nextNode, offset) => {
+          if (nextNode.nodeName === 'w:tbl') {
+            const tableIdx = tables.indexOf(nextNode as any);
+            const trs = getDirectChildrenByTagName(nextNode as Element, 'tr');
+            
+            if (trs.length > 0) {
+              const firstRowCells = getDirectChildrenByTagName(trs[0], 'tc');
+              const headers = firstRowCells.map(c => (c.textContent || '').trim());
+              
+              console.log("[FACULTY TABLE HEADERS]", headers);
+              
+              // Check for faculty name and designation columns
+              const hasFacultyNameCol = headers.some(h => 
+                h.toLowerCase().includes('name') && 
+                (h.toLowerCase().includes('faculty') || h.toLowerCase().includes('designation'))
+              );
+              
+              const hasDesignationCol = headers.some(h => 
+                h.toLowerCase().includes('designation')
+              );
+              
+              const hasDateCol = headers.some(h => 
+                h.toLowerCase().includes('date') && 
+                h.toLowerCase().includes('evaluation')
+              );
+              
+              if (hasFacultyNameCol || hasDesignationCol) {
+                console.log("[FACULTY FIELDS IN TABLE DETECTED]");
+                
+                // Add as individual fields instead of table
+                if (headers.some(h => h.toLowerCase().includes('name') && h.toLowerCase().includes('faculty'))) {
+                  headerFields.push({
+                    id: "faculty-name",
+                    label: "Faculty Member Name",
+                    type: "text",
+                    placeholder: "Enter faculty name",
+                    sectionId: "document-header",
+                    semanticRole: undefined,
+                    mapping: {
+                      type: "table-cell",
+                      tableIndex: tableIdx,
+                      rowIndex: 1,
+                      cellIndex: headers.findIndex(h => h.toLowerCase().includes('name'))
+                    }
+                  });
+                }
+                
+                if (headers.some(h => h.toLowerCase().includes('designation'))) {
+                  headerFields.push({
+                    id: "faculty-designation",
+                    label: "Faculty Designation",
+                    type: "text",
+                    placeholder: "Enter designation",
+                    sectionId: "document-header",
+                    semanticRole: undefined,
+                    mapping: {
+                      type: "table-cell",
+                      tableIndex: tableIdx,
+                      rowIndex: 1,
+                      cellIndex: headers.findIndex(h => h.toLowerCase().includes('designation'))
+                    }
+                  });
+                }
+                
+                if (hasDateCol) {
+                  headerFields.push({
+                    id: "evaluation-date",
+                    label: "Date of Evaluation",
+                    type: "text",
+                    placeholder: "DD/MM/YYYY",
+                    sectionId: "document-header",
+                    semanticRole: undefined,
+                    mapping: {
+                      type: "table-cell",
+                      tableIndex: tableIdx,
+                      rowIndex: 1,
+                      cellIndex: headers.findIndex(h => h.toLowerCase().includes('date'))
+                    }
+                  });
+                }
+              }
+            }
+          }
+        });
+      }
+    }
+
+    // Student Name and Register No Detection from "To be filled by Student" section
+    if (node.nodeName === 'w:p' && !hasDetectedStudentFields) {
+      const lowerText = text.toLowerCase();
+      const isStudentSection = 
+        lowerText.includes('to be filled by student') ||
+        lowerText.includes('to be filled by the student');
+      
+      if (isStudentSection) {
+        console.log("[STUDENT SECTION DETECTED]", text);
+        hasDetectedStudentFields = true;
+        
+        // Check next few elements for student table
+        const nextElements = structuralElements.slice(index + 1, Math.min(index + 10, structuralElements.length));
+        
+        nextElements.forEach((nextNode, offset) => {
+          if (nextNode.nodeName === 'w:tbl') {
+            const tableIdx = tables.indexOf(nextNode as any);
+            const trs = getDirectChildrenByTagName(nextNode as Element, 'tr');
+            
+            if (trs.length > 0) {
+              const firstRowCells = getDirectChildrenByTagName(trs[0], 'tc');
+              const headers = firstRowCells.map(c => (c.textContent || '').trim());
+              
+              console.log("[STUDENT TABLE HEADERS]", headers);
+              
+              const hasStudentNameCol = headers.some(h => {
+                const hl = h.toLowerCase();
+                return (
+                  hl.includes('name of the student') ||
+                  hl.includes('student name') ||
+                  (hl.includes('name') && hl.includes('student'))
+                );
+              });
+              
+              const hasRegisterCol = headers.some(h => {
+                const hl = h.toLowerCase();
+                return (
+                  hl.includes('register') ||
+                  hl.includes('reg no') ||
+                  hl.includes('roll')
+                );
+              });
+              
+              if (hasStudentNameCol && hasRegisterCol) {
+                console.log("[STUDENT FIELDS DETECTED IN TABLE]");
+                
+                // Add as individual fields
+                const nameColIndex = headers.findIndex(h => {
+                  const hl = h.toLowerCase();
+                  return hl.includes('name of the student') || hl.includes('student name') || (hl.includes('name') && hl.includes('student'));
+                });
+                
+                const regColIndex = headers.findIndex(h => {
+                  const hl = h.toLowerCase();
+                  return hl.includes('register') || hl.includes('reg no') || hl.includes('roll');
+                });
+                
+                if (nameColIndex !== -1) {
+                  headerFields.push({
+                    id: "student-name",
+                    label: "Student Name",
+                    type: "text",
+                    placeholder: "Enter student name",
+                    sectionId: "document-header",
+                    semanticRole: 'student_table',
+                    mapping: {
+                      type: "table-cell",
+                      tableIndex: tableIdx,
+                      rowIndex: 1,
+                      cellIndex: nameColIndex
+                    }
+                  });
+                }
+                
+                if (regColIndex !== -1) {
+                  headerFields.push({
+                    id: "register-no",
+                    label: "Register No.",
+                    type: "text",
+                    placeholder: "Enter register number",
+                    sectionId: "document-header",
+                    semanticRole: 'student_table',
+                    mapping: {
+                      type: "table-cell",
+                      tableIndex: tableIdx,
+                      rowIndex: 1,
+                      cellIndex: regColIndex
+                    }
+                  });
+                }
+              }
+            }
+          }
+        });
       }
     }
 
@@ -481,19 +687,38 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
   headers
 );
 
-        const isStudentTable =
-          (
-            headersText.includes("student") ||
-            headersText.includes("name of the student") ||
-            headersText.includes("student name")
-          ) &&
-          (
-            headersText.includes("register") ||
-            headersText.includes("register no") ||
-            headersText.includes("reg no") ||
-            headersText.includes("roll no") ||
-            headersText.includes("roll number")
+        // Enhanced student table detection with more patterns
+        const hasStudentNameColumn = headers.some(h => {
+          const hl = h.toLowerCase();
+          return (
+            hl.includes("name of the student") ||
+            hl.includes("student name") ||
+            hl.includes("name of student") ||
+            hl === "name" ||
+            (hl.includes("student") && hl.includes("name"))
           );
+        });
+
+        const hasRegisterColumn = headers.some(h => {
+          const hl = h.toLowerCase();
+          return (
+            hl.includes("register no") ||
+            hl.includes("reg no") ||
+            hl.includes("registration no") ||
+            hl.includes("roll no") ||
+            hl.includes("roll number") ||
+            hl.includes("enrollment") ||
+            hl === "register" ||
+            (hl.includes("reg") && (hl.includes("no") || hl.includes("number")))
+          );
+        });
+
+        const hasDateColumn = headers.some(h => {
+          const hl = h.toLowerCase();
+          return hl.includes("date") || hl === "date";
+        });
+
+        const isStudentTable = hasStudentNameColumn && (hasRegisterColumn || hasDateColumn);
 
         if (
           hasAnyEditableCell ||
@@ -794,7 +1019,6 @@ console.log(
   }))
 );
 
-alert("ANALYZER FINISHED");
 console.log("ANALYZER FINISHED");
 
 console.log(

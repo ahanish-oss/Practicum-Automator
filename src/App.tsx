@@ -46,8 +46,6 @@ export default function App() {
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [showLanding, setShowLanding] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
-  const [studentName, setStudentName] = useState('');
-  const [registerNo, setRegisterNo] = useState('');
 
   // Check for existing user session on mount
   useEffect(() => {
@@ -259,7 +257,7 @@ export default function App() {
       <>
         <div className="min-h-screen flex flex-col bg-white">
           {/* Auth Header */}
-          <header className="absolute top-0 left-0 right-0 z-10 py-6 px-8">
+          <header className="absolute top-0 left-0 right-0 z-50 py-6 px-8">
             <div className="max-w-7xl mx-auto flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-100/50">
@@ -271,26 +269,29 @@ export default function App() {
                 </div>
               </div>
               
-              <div className="flex items-center gap-3">
-                <Button
-                  variant="ghost"
+              <div className="flex items-center gap-3 relative z-50">
+                <button
                   onClick={() => {
+                    console.log('Login button clicked!');
                     setAuthMode('login');
                     setShowAuth(true);
                   }}
-                  className="text-gray-600 hover:text-gray-900 font-semibold"
+                  className="text-gray-600 hover:text-gray-900 font-semibold px-4 py-2 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
+                  type="button"
                 >
                   Login
-                </Button>
-                <Button
+                </button>
+                <button
                   onClick={() => {
+                    console.log('Sign Up button clicked!');
                     setAuthMode('signup');
                     setShowAuth(true);
                   }}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 rounded-xl font-semibold shadow-lg shadow-indigo-200"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-xl font-semibold shadow-lg shadow-indigo-200 cursor-pointer transition-all"
+                  type="button"
                 >
                   Sign Up
-                </Button>
+                </button>
               </div>
             </div>
           </header>
@@ -326,23 +327,10 @@ export default function App() {
             </div>
             
             {appDocument && (
-              <div className="flex items-center gap-4 pl-6 border-l border-gray-100">
-                <div className="flex items-center gap-3">
-                  <input
-                    type="text"
-                    value={studentName}
-                    onChange={(e) => setStudentName(e.target.value)}
-                    placeholder="Student Name"
-                    className="text-xs font-medium text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all w-48"
-                  />
-                  <input
-                    type="text"
-                    value={registerNo}
-                    onChange={(e) => setRegisterNo(e.target.value)}
-                    placeholder="Register No."
-                    className="text-xs font-medium text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all w-40"
-                  />
-                </div>
+              <div className="flex items-center gap-3 pl-6 border-l border-gray-100">
+                <span className="text-xs font-medium text-gray-500 line-clamp-1 max-w-[200px]">
+                  {appDocument.name}
+                </span>
               </div>
             )}
           </div>
