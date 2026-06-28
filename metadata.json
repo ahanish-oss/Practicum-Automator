@@ -1,6 +1,6 @@
 {
-  "name": "Practicum Automator",
-  "description": "A professional client-side platform to automate practicum template filling. Upload DOCX/PDF templates, detect fillable sections, and generate completed documents with dynamic forms.",
+  "name": "Aether AI",
+  "description": "The premium AI co-authoring workspace and intelligence hub for engineering research and lab records.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

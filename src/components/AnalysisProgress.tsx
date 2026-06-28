@@ -1,8 +1,10 @@
 import React from 'react';
 import { useStore } from '@/src/store/useStore';
+import { getModuleById } from '@/src/lib/module-config';
 
 export function AnalysisProgress() {
-  const { analysisProgress } = useStore();
+  const { analysisProgress, activeModuleId } = useStore();
+  const config = getModuleById(activeModuleId);
 
   const getStep = () => {
     if (analysisProgress < 30) return "Parsing Document Structure...";
@@ -45,7 +47,7 @@ export function AnalysisProgress() {
       
       <div className="space-y-3">
         <h3 className="text-xl font-semibold text-gray-900 tracking-tight">{getStep()}</h3>
-        <p className="text-gray-400 text-sm font-medium leading-relaxed px-4">Our AI is mapping semantic fields to your practicum template for professional automation.</p>
+        <p className="text-gray-400 text-sm font-medium leading-relaxed px-4">Our AI is mapping semantic fields to your {config.title.toLowerCase()} template for professional automation.</p>
       </div>
     </div>
   );

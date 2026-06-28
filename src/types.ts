@@ -68,6 +68,21 @@ export interface DocumentData {
   };
 }
 
+export interface SectionReview {
+  fieldId: string;
+  content: string; // current content (redundant mirrors or values)
+  approved: boolean;
+  revisionHistory: string[];
+  aiSuggestions: string[];
+}
+
+export interface ReportQuality {
+  score: number;
+  strengths: string[];
+  suggestions: string[];
+  missingInfo: string[];
+}
+
 export interface AppState {
   document: DocumentData | null;
   formValues: Record<string, string | any[]>;
@@ -76,7 +91,12 @@ export interface AppState {
   isDarkMode: boolean;
   highlightedFieldId: string | null;
   generatedDocxBlob: Blob | null;
-  previewMode: 'original' | 'generated';
+  activeModuleId: string;
+  
+  // Copilot States
+  sectionReviews: Record<string, SectionReview>;
+  reportQuality: ReportQuality | null;
+  isCopilotActive: boolean;
   
   setDocument: (doc: DocumentData | null) => void;
   updateFormValue: (fieldId: string, value: string | any[]) => void;
@@ -87,5 +107,11 @@ export interface AppState {
   resetAll: () => void;
   setFormValues: (values: Record<string, string | any[]>) => void;
   setGeneratedDocxBlob: (blob: Blob | null) => void;
-  setPreviewMode: (mode: 'original' | 'generated') => void;
+  setActiveModuleId: (id: string) => void;
+  
+  // Copilot Setters
+  setSectionReviews: (reviews: Record<string, SectionReview>) => void;
+  updateSectionReview: (fieldId: string, review: Partial<SectionReview>) => void;
+  setReportQuality: (quality: ReportQuality | null) => void;
+  setCopilotActive: (active: boolean) => void;
 }

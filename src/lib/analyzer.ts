@@ -5,8 +5,10 @@
 
 import mammoth from 'mammoth';
 import { Section, Field, FieldMapping } from '@/src/types';
+import { getModuleById } from './module-config';
 
-export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string): Promise<{ sections: Section[]; html: string }> => {
+export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string, moduleId: string = 'practicum'): Promise<{ sections: Section[]; html: string }> => {
+  const config = getModuleById(moduleId);
   const result = await mammoth.convertToHtml({ arrayBuffer });
   
   console.log("--- ANALYZER: Starting Structural Analysis ---");
@@ -54,45 +56,25 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
   };
 
   const getSectionRole = (normalizedTitle: string): Field['semanticRole'] => {
-    const procedureKeywords = [
-      'procedure', 'actual procedure followed', 'methodology', 
-      'steps', 'implementation', 'algorithm'
-    ];
-    const observationKeywords = [
-      'observation', 'observations'
-    ];
-    const resultsKeywords = [
-      'results', 'result', 'outcome', 'findings', 
-      'results observations', 'results/observations'
-    ];
-    const interpretationKeywords = [
-      'interpretation',
-      'interpretation of results',
-      'meaning of results',
-      'students to state the meaning',
-      'analysis',
-      'discussion',
-      'inference'
-    ];
-    const conclusionKeywords = [
-      'conclusion',
-      'conclusions',
-      'students to draw conclusions',
-      'draw conclusions',
-      'take decisions',
-      'take decision',
-      'learners to draw conclusions',
-      'final remarks',
-      'summary'
-    ];
-    const resourceKeywords = [
-      'actual resources used', 'actual resources', 'materials used', 
-      'tools used', 'resources used'
-    ];
-    const studentInfoKeywords = [
-      'filled by student', 'student information', 'student details', 'identity',
-      'to be filled by student', 'to be filled by the student'
-    ];
+    const defaultRoleKeywords = {
+      procedure: ['procedure', 'actual procedure followed', 'methodology', 'steps', 'implementation', 'algorithm'],
+      observation: ['observation', 'observations'],
+      result: ['results', 'result', 'outcome', 'findings', 'results observations', 'results/observations'],
+      interpretation: ['interpretation', 'interpretation of results', 'meaning of results', 'students to state the meaning', 'analysis', 'discussion', 'inference'],
+      conclusion: ['conclusion', 'conclusions', 'students to draw conclusions', 'draw conclusions', 'take decisions', 'take decision', 'learners to draw conclusions', 'final remarks', 'summary'],
+      resource_table: ['actual resources used', 'actual resources', 'materials used', 'tools used', 'resources used'],
+      student_table: ['filled by student', 'student information', 'student details', 'identity', 'to be filled by student', 'to be filled by the student']
+    };
+
+    const moduleKeywords = config?.roleKeywords || {};
+
+    const procedureKeywords = [...(defaultRoleKeywords.procedure), ...(moduleKeywords.procedure || [])];
+    const observationKeywords = [...(defaultRoleKeywords.observation), ...(moduleKeywords.observation || [])];
+    const resultsKeywords = [...(defaultRoleKeywords.result), ...(moduleKeywords.result || [])];
+    const interpretationKeywords = [...(defaultRoleKeywords.interpretation), ...(moduleKeywords.interpretation || [])];
+    const conclusionKeywords = [...(defaultRoleKeywords.conclusion), ...(moduleKeywords.conclusion || [])];
+    const resourceKeywords = [...(defaultRoleKeywords.resource_table), ...(moduleKeywords.resource_table || [])];
+    const studentInfoKeywords = [...(defaultRoleKeywords.student_table), ...(moduleKeywords.student_table || [])];
 
     if (procedureKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'procedure';
     if (observationKeywords.some(k => normalizedTitle === k || normalizedTitle.includes(k))) return 'observation';
@@ -360,6 +342,8 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
             intent
           };
 
+          console.log("[SECTION CREATED]", currentSection.title, "Intent:", currentSection.intent);
+
           const normalizedCurrentTitle = normalizeTitle(currentSection.title);
           const isStudentSection = 
             normalizedCurrentTitle.includes("filled by student") ||
@@ -389,14 +373,22 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
         const headers = firstRowCells.map(c => (c.textContent || '').trim());
         
         const entireTableText = (node.textContent || "").toLowerCase();
+        console.log("[TABLE RAW TEXT]", entireTableText);
 
-        const isStudentTableByContent =
-          entireTableText.includes("name of the student") &&
-          (
-            entireTableText.includes("register no") ||
-            entireTableText.includes("register")
-          );
-
+      const isStudentTableByContent =
+        (
+          entireTableText.includes("student") ||
+          entireTableText.includes("name of the student") ||
+          entireTableText.includes("student name")
+        ) &&
+        (
+          entireTableText.includes("register") ||
+          entireTableText.includes("register no") ||
+          entireTableText.includes("reg no") ||
+          entireTableText.includes("reg. no") ||
+          entireTableText.includes("roll no") ||
+          entireTableText.includes("roll number")
+        );
         if (entireTableText.includes("student")) {
           console.log(
             "[POSSIBLE STUDENT TABLE]",
@@ -652,6 +644,7 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
       const role = getSectionRole(normalizedTitle);
       const isActuallyExcluded = isExcluded(s.title);
       const hasFields = s.fields.length > 0;
+      const hasStudentTable = s.fields.some(f => f.semanticRole === 'student_table' || f.semanticRole === 'resource_table');
       
       // Check for strong signals of being fillable
       const studentKeywords = [
@@ -668,7 +661,7 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
       let shouldKeep = false;
       let reason = '';
   
-      if (isActuallyExcluded) {
+      if (isActuallyExcluded && !hasStudentTable) {
         shouldKeep = false;
         reason = 'Strictly excluded by isExcluded()';
       } else if (hasFields) {
@@ -724,8 +717,75 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     const normalized = normalizeTitle(s.title);
     const role = getSectionRole(normalized);
 
-    // Fallback Rule: Ensure learner sections ALWAYS have at least one field if they passed the filter
-    if (s.fields.length === 0) {
+    const isStudentIdentitySection =
+      normalized.includes("filled by student") ||
+      normalized.includes("student details") ||
+      normalized.includes("student information") ||
+      normalized.includes("to be filled by the student");
+
+    // Scan raw text content of the section for student table cues
+    const sectionTextLower = (s.title + "\n" + s.content).toLowerCase();
+    const hasStudentCues = 
+      sectionTextLower.includes("student") && 
+      (sectionTextLower.includes("register") || sectionTextLower.includes("reg no") || sectionTextLower.includes("reg. no") || sectionTextLower.includes("roll"));
+
+    if (isStudentIdentitySection || hasStudentCues) {
+      // Check if a table field already exists
+      const hasTableField = s.fields.some(f => f.type === 'table');
+      if (!hasTableField) {
+        // Construct fallback student table
+        const fallbackTableRows = [
+          {
+            isHeader: true,
+            cells: [
+              { text: "S.No", columnHeader: "S.No", isEditable: false },
+              { text: "Name of the Student", columnHeader: "Name of the Student", isEditable: false },
+              { text: "Register No", columnHeader: "Register No", isEditable: false }
+            ]
+          },
+          {
+            isHeader: false,
+            cells: [
+              { text: "1", columnHeader: "S.No", isEditable: false },
+              { text: "", columnHeader: "Name of the Student", isEditable: true },
+              { text: "", columnHeader: "Register No", isEditable: true }
+            ]
+          }
+        ];
+
+        // Remove any non-table fallback fields that might have been added to keep UI clean
+        s.fields = s.fields.filter(f => !f.id.startsWith("field-fallback-"));
+
+        s.fields.push({
+          id: `table_fallback_${s.id}`,
+          label: "Student Details",
+          type: 'table',
+          sectionId: s.id,
+          semanticRole: 'student_table',
+          headers: ["S.No", "Name of the Student", "Register No"],
+          tableRows: fallbackTableRows,
+          defaultValue: [["1", "", ""]],
+          mapping: {
+            type: 'table-cell',
+            tableIndex: 0
+          }
+        });
+        console.log(`[ANALYZER-FALLBACK] Created fallback student table for section: ${s.title}`);
+      } else {
+        // Ensure any existing table field in this section is marked as 'student_table' and labeled correctly
+        s.fields = s.fields.map(f => {
+          if (f.type === 'table') {
+            return {
+              ...f,
+              label: "Student Details",
+              semanticRole: 'student_table'
+            };
+          }
+          return f;
+        });
+      }
+    } else if (s.fields.length === 0) {
+      // Fallback Rule: Ensure learner sections ALWAYS have at least one field if they passed the filter
       const headerIdx = parseInt(s.id.split('-')[1]);
       const headerPIdx = paragraphs.indexOf(structuralElements[headerIdx] as any);
       const startPIdx = headerPIdx !== -1 ? headerPIdx + 1 : 0;
@@ -748,7 +808,7 @@ export const analyzeDocx = async (arrayBuffer: ArrayBuffer, xmlContent: string):
     }
 
     s.fields = s.fields.map(f => {
-      if (f.type === 'table') {
+      if (f.type === 'table' && !f.id.startsWith("table_fallback_")) {
         const tableIdx = f.mapping?.tableIndex;
         if (tableIdx !== undefined && tables[tableIdx]) {
           const trs = getElementsByTagName(tables[tableIdx], 'tr');

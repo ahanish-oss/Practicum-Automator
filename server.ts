@@ -3,11 +3,6 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
-import { exec } from "child_process";
-import { promisify } from "util";
-import fs from "fs";
-
-const execPromise = promisify(exec);
 
 dotenv.config();
 
@@ -110,43 +105,79 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
 
-  // Only register Gemini endpoint in development
-  // In production on Vercel, use /api/gemini/generate.ts serverless function
-  if (process.env.NODE_ENV !== "production") {
-    app.post("/api/gemini/generate", async (req, res) => {
-      try {
-        console.log("[API] Request received");
-        const { prompt, fields, model } = req.body;
+  app.post("/api/gemini/generate", async (req, res) => {
+    try {
+      console.log("[API] Request received");
+      const { prompt, fields, model, documentType, aiPersona } = req.body;
       
       let promptToUse = prompt || "";
       if (fields && Array.isArray(fields) && fields.length > 0) {
         console.log(`[API] Dynamic fields provided: ${fields.length} fields found.`);
-        promptToUse = `You are completing an academic/professional engineering laboratory practicum document.
-Context or Document details:
-${prompt || "Generate realistic student responses for this practicum."}
+        // Find context details from first field
+        const firstField = fields[0];
+        const experimentTitle = firstField?.experimentTitle || firstField?.topic || "MQTT Publish Subscribe Architecture";
+        const docType = documentType || "Engineering Lab Record";
+        const persona = aiPersona || "expert engineering laboratory instructor";
 
-Below is the list of fields that need responses. Use ONLY the field IDs provided below. NEVER invent or mismatch IDs.
+        promptToUse = `You are an expert ${persona}.
 
-Fields:
-${JSON.stringify(fields, null, 2)}
+Generate realistic, technical, academic laboratory record content.
 
-Instructions for generating field values:
-1. For text or textarea fields (type !== "table"):
-   - Set "value" to a realistic, highly professional, non-trivial, domain-specific student response. Make sure it is descriptive, scientific, and accurate (e.g., for "mqtt observations" write an elite paragraph describing latency, broker synchronization, keepalive intervals, and broker status logs; for "actual procedure followed" write numbered paragraphs detailing environment setups, client scripts, testing, and result captures).
-   - Set "tableValue" to null or omit it.
+Primary Context Source:
+- Experiment Topic (Topic/Title): "${experimentTitle}"
+- Document Type: "${docType}"
 
-2. For table fields (where type is "table"):
-   - Set "value" to null or omit it.
-   - Set "tableValue" to a 2D Array of Strings representing the data rows. DO NOT include the table headers as the first data row.
-   - IMPORTANT RULES FOR TABLES:
-     * FILL ALL AVAILABLE ROWS: You must generate a row in "tableValue" for EACH data row (each item in the field's "tableRows" list where "isHeader" is false).
-     * DO NOT MODIFY OR OVERWRITE prefilled identifier columns (like S.No, Serial Number, or pre-entered names). Keep the text values of those columns exactly as they are in the template (e.g., if the first cell of a row has text "1" or is an empty string for a prefilled index, pass that exact string or "" in your cell response; do NOT fabricated new identifiers).
-     * USE DOMAIN-SPECIFIC RESOURCES: Fill the editable columns with highly realistic engineering and laboratory tools/configs (e.g. for MQTT use "Mosquitto MQTT Broker", "Paho python-mqtt client", "Raspberry Pi Pico W", "Wireshark", and specific configurations like "Mosquitto v2.0.15", "Latest / Python 3.12", "TCP Port 1883", and remarks like "Running", "Connected & Publishing", "Verified successfully").
-     * Example: For a table field with headers ["S.No", "Resource Name", "Version/Configuration", "Remarks"] and 2 data rows, the generated "tableValue" should look like:
-       [
-         ["", "MQTT Broker (Mosquitto)", "v2.0.18 on Port 1883", "System Broker - Running"],
-         ["", "Publisher Client", "Python Paho-MQTT v1.6.1", "Tested & Connected"]
-       ]
+Below is the list of fields requiring high-fidelity responses. Make sure each generated value matches the requested ID and is highly specific to the experiment topic ("${experimentTitle}").
+
+Fields to generate:
+${JSON.stringify(fields.map(f => ({
+  fieldId: f.fieldId || f.id,
+  id: f.id,
+  section: f.section,
+  label: f.label,
+  role: f.role || "observation",
+  topic: f.topic || experimentTitle,
+  type: f.type,
+  headers: f.headers,
+  tableRows: f.tableRows
+})), null, 2)}
+
+Rules for generating response content:
+1. Generate detailed, highly specific academic content solely about "${experimentTitle}".
+2. Never repeat or use generic, lazy or placeholder phrases such as:
+   - "Experiment completed successfully"
+   - "Data was observed"
+   - "System worked correctly"
+   - "The experiment was completed successfully and all objectives were achieved."
+   - "Data transmission was successful without packet loss."
+   - "Generated content for ..."
+3. Output format requirements:
+   - Return ONLY a valid JSON Array of objects.
+   - Each object MUST represent a field, with key "id".
+   - For text or textarea fields, set "value" to a string of technical generated text and omit/set "tableValue" to null.
+   - For table fields, set "tableValue" to a 2D Array of Strings representing the data rows (DO NOT include the table headers as the first row). Set "value" to null.
+
+4. Section-Specific Intelligence & Content Guidelines based on "role":
+   - For role: "resource_table" (Actual Resources Used):
+     * Generate realistic hardware, software, tools, versions, and configurations.
+     * Fill the columns with rich details instead of generic text.
+     * For example, instead of transmitting generic names, generate exactly:
+       Resource Name: "Desktop Computer" | Specifications: "Intel Core i5, 8GB RAM"
+       Resource Name: "MQTT Broker" | Specifications: "Eclipse Mosquitto 2.0"
+       Resource Name: "Python" | Specifications: "Version 3.12"
+       Resource Name: "VS Code" | Specifications: "Version 1.98"
+       Resource Name: "Wireshark" | Specifications: "Version 4.2"
+       Include appropriate specs, quantities, and active/connected status.
+   - For role: "procedure" (Actual Procedure Followed):
+     * Generate detailed, numbered procedural steps outlining setup, script creation, initialization, execution, and confirmation.
+   - For role: "observation" (Observations / Measurements):
+     * Generate actual measurable observations, specific values, network pings, latency timings (e.g., in milliseconds), broker server status logs, and subscription metrics.
+   - For role: "result" (Results/Observations Summary):
+     * Summarize technical experimental outcomes with precise qualitative or quantitative results.
+   - For role: "interpretation" (Interpretation of Results):
+     * Explain what the obtained values/observations scientifically and technically mean.
+   - For role: "conclusion" (Conclusions / Learning Outcomes):
+     * State clearly whether the objectives of "${experimentTitle}" were met and what practical engineering takeaways were learned.
 `;
       }
 
@@ -214,77 +245,168 @@ Instructions for generating field values:
     }
   });
 
-  app.post("/api/convert-to-pdf", async (req, res) => {
+  // 1. Single section revise endpoint
+  app.post("/api/gemini/copilot/revise", async (req, res) => {
     try {
-      console.log("[API] PDF conversion request received");
-      const { docx } = req.body;
-      if (!docx) {
-        return res.status(200).json({ success: false, error: "Missing DOCX data" });
-      }
+      console.log("[COPILOT API] Revise request received");
+      const { fieldId, fieldLabel, fieldType, currentValue, instruction, experimentTitle, semanticRole, model, documentType, aiPersona } = req.body;
+      
+      const persona = aiPersona || "Engineering Lab Practicum Advisor";
+      const docType = documentType || "Laboratory Experiment";
+      const prompt = `You are an expert ${persona}.
+We are revising a specific section of a student's academic document.
 
-      const docxBuffer = Buffer.from(docx, 'base64');
-      const pdfBuffer = await convertDocxBufferToPdf(docxBuffer);
-      const pdfBase64 = pdfBuffer.toString('base64');
+Experiment: "${experimentTitle || docType}"
+Section Label: "${fieldLabel || "Section"}"
+Section Role: "${semanticRole || "observation"}"
+Field Type: "${fieldType || "textarea"}"
 
-      res.json({ success: true, pdf: pdfBase64 });
-    } catch (error: any) {
-      console.error("[API PDF ERROR]", error);
-      res.status(200).json({ success: false, error: "Unable to generate PDF. Please try again." });
-    }
-  });
-  }
+Current Content:
+${JSON.stringify(currentValue, null, 2)}
 
-async function convertDocxBufferToPdf(docxBuffer: Buffer): Promise<Buffer> {
-  const tempDir = path.join(process.cwd(), 'temp_conversion');
-  if (!fs.existsSync(tempDir)) {
-    fs.mkdirSync(tempDir, { recursive: true });
-  }
+Student's Instruction for Revision:
+"${instruction}"
 
-  const tempId = Date.now() + '_' + Math.random().toString(36).substring(2, 9);
-  const docxPath = path.join(tempDir, `${tempId}.docx`);
-  const pdfPath = path.join(tempDir, `${tempId}.pdf`);
-  const scriptPath = path.join(tempDir, `${tempId}.ps1`);
+Your task is to rewrite or edit this content according to the instruction.
+Rules:
+1. Maintain high-fidelity academic engineering language.
+2. Address the instruction precisely.
+3. If this is a table (fieldType === "table"), output a JSON array of arrays of strings (2D array of cells representing the row data, excluding the header row).
+4. If this is a text or textarea field, return the revised string.
 
-  try {
-    await fs.promises.writeFile(docxPath, docxBuffer);
-
-    const psScript = `
-$ErrorActionPreference = 'Stop'
-$word = New-Object -ComObject Word.Application
-$word.Visible = $false
-try {
-    $doc = $word.Documents.Open("${docxPath.replace(/\\/g, '\\\\')}")
-    $doc.SaveAs("${pdfPath.replace(/\\/g, '\\\\')}", 17)
-    $doc.Close()
-} finally {
-    $word.Quit()
-    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($word) | Out-Null
-    [System.GC]::Collect()
-    [System.GC]::WaitForPendingFinalizers()
+Output must be in JSON format:
+{
+  "revisedValue": "the revised text string" or [["cell1", "cell2"], ["cell3", "cell4"]] for table fields
 }
 `;
 
-    await fs.promises.writeFile(scriptPath, psScript, 'utf8');
-    await execPromise(`powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`);
+      const requestedModel = model || "gemini-3.5-flash";
+      const response = await callModelWithRetry(requestedModel, prompt, { responseMimeType: "application/json" });
 
-    if (!fs.existsSync(pdfPath)) {
-      throw new Error("PDF file was not created by the converter");
+      if (!response || !response.text) {
+        throw new Error("No response from model");
+      }
+
+      console.log("[COPILOT API] Revision received successfully");
+      const cleaned = response.text.trim();
+      const parsed = JSON.parse(cleaned);
+      res.json({ success: true, revisedValue: parsed.revisedValue });
+    } catch (error: any) {
+      console.error("[COPILOT REVISE ERROR]", error);
+      res.status(200).json({ success: false, error: error.message || "Failed to revise section" });
     }
+  });
 
-    const pdfBuffer = await fs.promises.readFile(pdfPath);
-    return pdfBuffer;
-  } finally {
+  // 2. Chat with global/local report updates endpoint
+  app.post("/api/gemini/copilot/chat", async (req, res) => {
     try {
-      if (fs.existsSync(docxPath)) await fs.promises.unlink(docxPath);
-    } catch {}
-    try {
-      if (fs.existsSync(pdfPath)) await fs.promises.unlink(pdfPath);
-    } catch {}
-    try {
-      if (fs.existsSync(scriptPath)) await fs.promises.unlink(scriptPath);
-    } catch {}
+      console.log("[COPILOT API] Chat request received");
+      const { message, chatHistory, formValues, fields, experimentTitle, model, documentType, aiPersona } = req.body;
+
+      const persona = aiPersona || "Engineering Lab Practicum Advisor and Copilot";
+      const docType = documentType || "academic document";
+      const prompt = `You are an expert ${persona}.
+You are helping a student review, refine, and improve their ${docType}.
+
+Experiment Topic: "${experimentTitle || "MQTT Publish Subscribe Architecture"}"
+
+The current fields and their metadata in the report are:
+${JSON.stringify(fields, null, 2)}
+
+Current values in the report:
+${JSON.stringify(formValues, null, 2)}
+
+The student says: "${message}"
+
+Your tasks:
+1. Provide a direct, polite, helpful response answering their question or explaining what modifications you've made. Keep it concise, academic, and highly professional.
+2. If the user asked for a change (e.g. "make observations more technical", "rewrite slide 1", "make everything IEEE", etc.), identify which fields in 'formValues' should be updated.
+For each updated field, write the complete, updated content.
+- For table fields, output the updated table rows as a 2D Array of Strings (excluding headers).
+- For text/textarea fields, output the updated string.
+
+Output must be in JSON format:
+{
+  "text": "Your textual response here...",
+  "updatedFields": {
+    "fieldId": "revised text content or [[cell1, cell2], [cell3, cell4]] for tables"
   }
 }
+`;
+
+      const requestedModel = model || "gemini-3.5-flash";
+      const response = await callModelWithRetry(requestedModel, prompt, { responseMimeType: "application/json" });
+
+      if (!response || !response.text) {
+        throw new Error("No response from model");
+      }
+
+      console.log("[COPILOT API] Chat completed successfully");
+      const cleaned = response.text.trim();
+      const parsed = JSON.parse(cleaned);
+      res.json({ success: true, text: parsed.text, updatedFields: parsed.updatedFields || {} });
+    } catch (error: any) {
+      console.error("[COPILOT CHAT ERROR]", error);
+      res.status(200).json({ success: false, error: error.message || "Failed to complete chat" });
+    }
+  });
+
+  // 3. Report evaluation endpoint
+  app.post("/api/gemini/copilot/evaluate", async (req, res) => {
+    try {
+      console.log("[COPILOT API] Evaluate request received");
+      const { experimentTitle, formValues, fields, model, documentType, aiPersona } = req.body;
+
+      const persona = aiPersona || "Engineering Lab Practicum Evaluator";
+      const docType = documentType || "academic document";
+      const prompt = `You are an expert ${persona}.
+Analyze the following student ${docType} and calculate a quality score.
+
+Experiment Topic: "${experimentTitle || "MQTT Publish Subscribe Architecture"}"
+
+Report Contents:
+${JSON.stringify(
+  fields.map((f: any) => ({
+    id: f.id,
+    label: f.label,
+    role: f.role || f.semanticRole,
+    value: formValues[f.id]
+  })),
+  null,
+  2
+)}
+
+Evaluate the quality of the report out of 100 based on detail, technical depth, proper metrics, completeness, and clarity.
+Identify:
+1. At least 2-3 specific Strengths (e.g., "Clear, numbered procedural steps", "Accurate broker port configuration").
+2. At least 2-3 specific suggestions/recommendations to improve the score.
+3. Specific Missing Information (e.g. "No hardware specifications provided", "No network latency measurements", "Missing packet loss metrics", "Screenshots placeholder warning").
+
+Output must be in JSON format conforming to:
+{
+  "score": 85,
+  "strengths": ["...", "..."],
+  "suggestions": ["...", "..."],
+  "missingInfo": ["...", "..."]
+}
+`;
+
+      const requestedModel = model || "gemini-3.5-flash";
+      const response = await callModelWithRetry(requestedModel, prompt, { responseMimeType: "application/json" });
+
+      if (!response || !response.text) {
+        throw new Error("No response from model");
+      }
+
+      console.log("[COPILOT API] Evaluation completed successfully");
+      const cleaned = response.text.trim();
+      const parsed = JSON.parse(cleaned);
+      res.json({ success: true, quality: parsed });
+    } catch (error: any) {
+      console.error("[COPILOT EVAL ERROR]", error);
+      res.status(200).json({ success: false, error: error.message || "Failed to evaluate report" });
+    }
+  });
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

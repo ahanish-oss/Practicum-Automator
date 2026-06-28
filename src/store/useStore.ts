@@ -17,7 +17,12 @@ export const useStore = create<AppState>()(
       isDarkMode: false,
       highlightedFieldId: null,
       generatedDocxBlob: null,
-      previewMode: 'original',
+      activeModuleId: 'practicum',
+      
+      // Copilot States
+      sectionReviews: {},
+      reportQuality: null,
+      isCopilotActive: false,
 
       setDocument: (doc) => {
         const initialValues: Record<string, any> = {};
@@ -28,7 +33,14 @@ export const useStore = create<AppState>()(
             }
           });
         });
-        set({ document: doc, formValues: initialValues, generatedDocxBlob: null, previewMode: 'original' });
+        set({ 
+          document: doc, 
+          formValues: initialValues, 
+          generatedDocxBlob: null,
+          sectionReviews: {},
+          reportQuality: null,
+          isCopilotActive: false
+        });
       },
       setHighlightedField: (id) => set({ highlightedFieldId: id }),
       updateFormValue: (fieldId, value) =>
@@ -37,16 +49,48 @@ export const useStore = create<AppState>()(
             ...state.formValues,
             [fieldId]: value,
           },
+          generatedDocxBlob: null,
         })),
       setAnalysisProgress: (progress) => set({ analysisProgress: progress }),
       setLoading: (loading) => set({ isLoading: loading }),
       toggleDarkMode: (dark) => set((state) => ({ 
         isDarkMode: dark !== undefined ? dark : !state.isDarkMode 
       })),
-      resetAll: () => set({ document: null, formValues: {}, analysisProgress: 0, generatedDocxBlob: null, previewMode: 'original' }),
-      setFormValues: (values) => set({ formValues: values }),
+      resetAll: () => set({ 
+        document: null, 
+        formValues: {}, 
+        analysisProgress: 0, 
+        generatedDocxBlob: null,
+        sectionReviews: {},
+        reportQuality: null,
+        isCopilotActive: false
+      }),
+      setFormValues: (values) => set({ formValues: values, generatedDocxBlob: null }),
       setGeneratedDocxBlob: (blob) => set({ generatedDocxBlob: blob }),
-      setPreviewMode: (mode) => set({ previewMode: mode }),
+      setActiveModuleId: (id) => set({ activeModuleId: id }),
+      
+      // Copilot Setters
+      setSectionReviews: (reviews) => set({ sectionReviews: reviews }),
+      updateSectionReview: (fieldId, review) => set((state) => {
+        const current = state.sectionReviews[fieldId] || {
+          fieldId,
+          content: '',
+          approved: false,
+          revisionHistory: [],
+          aiSuggestions: []
+        };
+        return {
+          sectionReviews: {
+            ...state.sectionReviews,
+            [fieldId]: {
+              ...current,
+              ...review
+            }
+          }
+        };
+      }),
+      setReportQuality: (quality) => set({ reportQuality: quality }),
+      setCopilotActive: (active) => set({ isCopilotActive: active }),
     }),
     {
       name: 'practicum-store',
@@ -77,7 +121,8 @@ export const useStore = create<AppState>()(
       } as any,
       partialize: (state) => ({ 
         formValues: state.formValues, 
-        isDarkMode: state.isDarkMode 
+        isDarkMode: state.isDarkMode,
+        activeModuleId: state.activeModuleId
       }),
     }
   )

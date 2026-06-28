@@ -6,13 +6,15 @@
 import React, { useCallback, useState } from 'react';
 import { useStore } from '@/src/store/useStore';
 import { analyzeDocx } from '@/src/lib/analyzer';
+import { getModuleById } from '@/src/lib/module-config';
 import JSZip from 'jszip';
 import { Card } from '@/components/ui/card';
 import { Upload, FileType, CheckCircle2 } from 'lucide-react';
 
 export function FileUploader() {
-  const { setLoading, setDocument, setAnalysisProgress } = useStore();
+  const { setLoading, setDocument, setAnalysisProgress, activeModuleId } = useStore();
   const [isDragging, setIsDragging] = useState(false);
+  const config = getModuleById(activeModuleId);
 
   const processFile = async (file: File) => {
     if (!file) return;
@@ -37,7 +39,7 @@ export function FileUploader() {
       if (isDocx) {
         const zip = await JSZip.loadAsync(arrayBuffer);
         const xmlContent = await zip.file('word/document.xml')?.async('string');
-        const result = await analyzeDocx(arrayBuffer, xmlContent || '');
+        const result = await analyzeDocx(arrayBuffer, xmlContent || '', activeModuleId);
         sections = result.sections;
         html = result.html;
       } else {
@@ -117,7 +119,7 @@ export function FileUploader() {
         </div>
         
         <div className="space-y-1">
-          <h3 className="text-xl font-semibold tracking-tight text-gray-900">Upload Practicum</h3>
+          <h3 className="text-xl font-semibold tracking-tight text-gray-900">{config.uploadTitle}</h3>
           <p className="text-gray-400 text-sm font-medium">Drag and drop your template files here</p>
         </div>
 

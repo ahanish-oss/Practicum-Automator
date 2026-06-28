@@ -1,16 +1,26 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { useEffect, useState } from 'react';
 import { useStore } from './store/useStore';
+import { getModuleById } from './lib/module-config';
 import { FileUploader } from './components/FileUploader';
 import { DynamicForm } from './components/DynamicForm';
 import { DocPreview } from './components/DocPreview';
 import { DraftsPanel } from './components/DraftsPanel';
 import { AnalysisProgress } from './components/AnalysisProgress';
+import { AIChatPanel } from './components/AIChatPanel';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { FileText, Download, RotateCcw, CheckCircle2, History, Eye, Loader2 } from 'lucide-react';
+import { FileText, Download, RotateCcw, CheckCircle2, History, FileDown, Eye, Home } from 'lucide-react';
 import { exportDocx, generateDocxBlob } from './lib/exporter';
+import { exportPdf } from './lib/pdfExporter';
 import { db } from './lib/db';
 import { motion, AnimatePresence } from 'framer-motion';
+import { GeneratedDocPreviewModal } from './components/GeneratedDocPreviewModal';
+import { LandingPage } from './components/LandingPage';
 import { saveAs } from 'file-saver';
 
 export default function App() {
@@ -20,13 +30,47 @@ export default function App() {
     resetAll,
     formValues,
     generatedDocxBlob,
-    previewMode,
     setGeneratedDocxBlob,
-    setPreviewMode
+    isCopilotActive,
+    activeModuleId,
+    setActiveModuleId
   } = useStore();
 
+  const [currentPath, setCurrentPath] = useState(window.location.pathname);
   const [showDrafts, setShowDrafts] = useState(false);
-  const [isConvertingPdf, setIsConvertingPdf] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  const pathMap: Record<string, string> = {
+    '/practicum': 'practicum',
+    '/micro-project': 'micro_project',
+    '/mini-project': 'mini_project',
+    '/major-project': 'major_project',
+    '/internship': 'internship',
+    '/seminar': 'seminar'
+  };
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPath(window.location.pathname);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateTo = (path: string) => {
+    window.history.pushState({}, '', path);
+    setCurrentPath(path);
+  };
+
+  useEffect(() => {
+    const moduleId = pathMap[currentPath];
+    if (moduleId) {
+      setActiveModuleId(moduleId);
+    }
+  }, [currentPath, setActiveModuleId]);
+
+  const config = getModuleById(activeModuleId);
 
   const handleSaveDraft = async () => {
     if (!appDocument) return;
@@ -34,8 +78,8 @@ export default function App() {
     setShowDrafts(true);
   };
 
-  const validateAndGenerateBlob = async (): Promise<Blob | null> => {
-    if (!appDocument) return null;
+  const validateForm = (): boolean => {
+    if (!appDocument) return false;
 
     // Validation: Check if all editable columns are filled for any row that has at least one entry
     const allFields = appDocument.sections.flatMap(s => s.fields);
@@ -59,104 +103,59 @@ export default function App() {
           .map(f => f.label);
         
         alert(`Validation Error for "${rowLabel}": Please provide ${missingLabels.join(', ')}.`);
-        return null;
+        return false;
       }
     }
-
-    try {
-      const blob = await generateDocxBlob(appDocument, formValues);
-      setGeneratedDocxBlob(blob);
-      return blob;
-    } catch (error) {
-      console.error("Failed to generate DOCX blob:", error);
-      alert("Failed to generate document. Please check the template format.");
-      return null;
-    }
+    return true;
   };
 
-  const downloadFile = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    // Use a slight timeout to revoke the object URL so the browser/download manager has time to start downloading
-    setTimeout(() => URL.revokeObjectURL(url), 100);
-  };
-
-  const handleGenerateReport = async () => {
-    const blob = await validateAndGenerateBlob();
-    if (blob) {
-      downloadFile(blob, `Filled_${appDocument.name}`);
-    }
-  };
-
-  const handlePreviewGenerated = async () => {
-    const blob = await validateAndGenerateBlob();
-    if (blob) {
-      setPreviewMode('generated');
-      // Scroll to the preview area
-      setTimeout(() => {
-        const previewEl = document.querySelector('.docx-viewer-container');
-        if (previewEl) {
-          previewEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      }, 100);
-    }
-  };
-
-  const handleDownloadDocx = () => {
-    if (!generatedDocxBlob) {
-      alert("Generate the report before previewing.");
-      return;
-    }
-    downloadFile(generatedDocxBlob, `Filled_${appDocument.name}`);
-  };
-
-  const handleDownloadPdf = async () => {
-    if (!generatedDocxBlob) {
-      alert("Generate the report before exporting.");
-      return;
-    }
+  const handleDownloadDocx = async () => {
     if (!appDocument) return;
+    if (generatedDocxBlob) {
+      saveAs(generatedDocxBlob, `Filled_${appDocument.name}`);
+      return;
+    }
 
-    setIsConvertingPdf(true);
-    try {
-      // Convert Blob to Base64
-      const reader = new FileReader();
-      reader.readAsDataURL(generatedDocxBlob);
-      reader.onloadend = async () => {
-        const base64Data = (reader.result as string).split(',')[1];
-        try {
-          const response = await fetch('/api/convert-to-pdf', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ docx: base64Data })
-          });
-          const data = await response.json();
-          if (data.success && data.pdf) {
-            const pdfBlob = new Blob([Uint8Array.from(atob(data.pdf), c => c.charCodeAt(0))], { type: 'application/pdf' });
-            downloadFile(pdfBlob, `Filled_${appDocument.name.replace('.docx', '')}.pdf`);
-          } else {
-            alert(data.error || "Unable to generate PDF. Please try again.");
-          }
-        } catch (e) {
-          console.error("PDF conversion endpoint error:", e);
-          alert("Unable to generate PDF. Please try again.");
-        } finally {
-          setIsConvertingPdf(false);
-        }
-      };
-    } catch (err) {
-      console.error("Failed to read DOCX blob:", err);
-      alert("Unable to generate PDF. Please try again.");
-      setIsConvertingPdf(false);
+    if (validateForm()) {
+      setIsExportingPdf(true);
+      try {
+        const blob = await generateDocxBlob(appDocument!, formValues);
+        setGeneratedDocxBlob(blob);
+        saveAs(blob, `Filled_${appDocument.name}`);
+      } catch (error: any) {
+        console.error("GENERATION ERROR:", error);
+        alert("Failed to generate document: " + error.message);
+      } finally {
+        setIsExportingPdf(false);
+      }
     }
   };
+
+  const handlePreviewGeneratedReport = () => {
+    if (!generatedDocxBlob) {
+      alert("Generate the report first before previewing.");
+      return;
+    }
+    setIsPreviewOpen(true);
+  };
+
+  const handleExportPdf = async () => {
+    if (validateForm()) {
+      await exportPdf(appDocument!, formValues, setIsExportingPdf, generatedDocxBlob);
+    }
+  };
+
+  if (currentPath === '/' || !pathMap[currentPath]) {
+    return (
+      <LandingPage 
+        onSelectModule={(moduleId) => {
+          setActiveModuleId(moduleId);
+          const path = Object.keys(pathMap).find(k => pathMap[k] === moduleId) || '/practicum';
+          navigateTo(path);
+        }} 
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-[#fafafb]">
@@ -164,15 +163,25 @@ export default function App() {
       <header className="sticky top-0 z-50 w-full bg-white/80 backdrop-blur-md border-b border-gray-100 py-4 px-8">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-6">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigateTo('/')}>
               <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-100/50">
                 <FileText className="w-5 h-5 text-white" />
               </div>
               <div className="flex flex-col">
-                <h1 className="text-[13px] font-semibold text-gray-900 tracking-tight">Practicum Intelligence</h1>
-                <span className="text-[11px] text-gray-400 font-medium">Document Automation</span>
+                <h1 className="text-[13px] font-semibold text-gray-900 tracking-tight">Aether Workspace</h1>
+                <span className="text-[11px] text-gray-400 font-medium">AI Document Copilot</span>
               </div>
             </div>
+
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              onClick={() => navigateTo('/')}
+              className="gap-2 text-xs font-semibold text-gray-500 hover:text-indigo-600 transition-colors"
+            >
+              <Home className="w-4 h-4" />
+              Portal Home
+            </Button>
             
             {appDocument && (
               <div className="flex items-center gap-3 pl-6 border-l border-gray-100">
@@ -207,53 +216,30 @@ export default function App() {
                 >
                   <RotateCcw className="w-4 h-4" />
                 </Button>
-                
                 <Button 
-                   onClick={handlePreviewGenerated}
-                   variant="outline"
-                   className="border-gray-200 text-gray-700 hover:text-indigo-600 rounded-xl px-4 h-11 text-[11px] font-semibold transition-all hover:bg-gray-50"
+                   onClick={handlePreviewGeneratedReport}
+                   disabled={isExportingPdf}
+                   className="bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 text-white rounded-xl px-5 h-11 text-[11px] font-semibold shadow-xl shadow-amber-100 transition-all border-none flex items-center justify-center cursor-pointer"
                 >
                    <Eye className="w-4 h-4 mr-2" />
                    Preview Generated Report
                 </Button>
-
                 <Button 
-                   onClick={handleGenerateReport}
-                   className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-5 h-11 text-[11px] font-semibold shadow-xl shadow-indigo-100 transition-all border-none"
+                   onClick={handleDownloadDocx}
+                   disabled={isExportingPdf}
+                   className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white rounded-xl px-5 h-11 text-[11px] font-semibold shadow-xl shadow-indigo-100 transition-all border-none flex items-center justify-center cursor-pointer"
                 >
                    <Download className="w-4 h-4 mr-2" />
-                   Generate Report
+                   Download DOCX
                 </Button>
-
-                {generatedDocxBlob && (
-                  <div className="flex items-center gap-2 pl-3 border-l border-gray-100">
-                    <Button 
-                       onClick={handleDownloadDocx}
-                       variant="outline"
-                       className="border-indigo-100 text-indigo-600 hover:bg-indigo-50/50 rounded-xl px-4 h-11 text-[11px] font-semibold transition-all"
-                    >
-                       Download DOCX
-                    </Button>
-                    <Button 
-                       onClick={handleDownloadPdf}
-                       variant="outline"
-                       className="border-indigo-100 text-indigo-600 hover:bg-indigo-50/50 rounded-xl px-4 h-11 text-[11px] font-semibold transition-all flex items-center gap-2"
-                       disabled={isConvertingPdf}
-                    >
-                       {isConvertingPdf ? (
-                         <>
-                           <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
-                           Converting...
-                         </>
-                       ) : (
-                         <>
-                           <Download className="w-4 h-4" />
-                           Download PDF
-                         </>
-                       )}
-                    </Button>
-                  </div>
-                )}
+                <Button 
+                   onClick={handleExportPdf}
+                   disabled={isExportingPdf}
+                   className="bg-rose-600 hover:bg-rose-700 disabled:bg-rose-400 text-white rounded-xl px-5 h-11 text-[11px] font-semibold shadow-xl shadow-rose-150 transition-all border-none flex items-center justify-center cursor-pointer"
+                >
+                   <FileDown className="w-4 h-4 mr-2" />
+                   {isExportingPdf ? 'Exporting PDF...' : 'Export to PDF'}
+                </Button>
               </>
             )}
           </div>
@@ -274,10 +260,10 @@ export default function App() {
               >
                 <div className="text-center space-y-4 max-w-xl mx-auto mb-16">
                   <h2 className="text-4xl font-semibold tracking-tight text-gray-900 leading-tight">
-                    Transform your practicum into <span className="text-indigo-600">intelligence</span>.
+                    Transform your {config.title.toLowerCase()} into <span className="text-indigo-600">intelligence</span>.
                   </h2>
                   <p className="text-gray-400 text-lg leading-relaxed font-medium">
-                    Upload your template and we'll map all student sections semantically for effortless completion.
+                    Upload your {config.title.toLowerCase()} template and we'll map all fillable sections semantically for effortless completion.
                   </p>
                 </div>
                 <FileUploader />
@@ -304,46 +290,32 @@ export default function App() {
                             <CheckCircle2 className="w-4 h-4 text-indigo-500" />
                             <h3 className="text-[11px] font-bold text-gray-400 tracking-wider uppercase">High-Fidelity Preview</h3>
                          </div>
-                         
-                         {/* Toggle Tabs for Original vs Generated Preview */}
-                         <div className="flex items-center gap-1 bg-gray-100/80 p-1 rounded-xl border border-gray-200/50">
-                           <button
-                             onClick={() => setPreviewMode('original')}
-                             className={`text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                               previewMode === 'original' 
-                                 ? 'bg-white text-indigo-600 shadow-sm border border-gray-200/20' 
-                                 : 'text-gray-500 hover:text-gray-900 border border-transparent'
-                             }`}
-                           >
-                             Original Template
-                           </button>
-                           <button
-                             onClick={() => setPreviewMode('generated')}
-                             className={`text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                               previewMode === 'generated' 
-                                 ? 'bg-white text-indigo-600 shadow-sm border border-gray-200/20' 
-                                 : 'text-gray-500 hover:text-gray-900 border border-transparent'
-                             }`}
-                           >
-                             Generated Report
-                           </button>
-                         </div>
+                         <span className="text-[10px] text-gray-300 font-medium">Standard A4 Layout • ISO 216</span>
                       </div>
                       <div className="bg-white/50 rounded-[40px] border border-gray-100 overflow-hidden shadow-sm">
                         <DocPreview />
                       </div>
                     </div>
 
-                    {/* Editor View */}
-                    <div className="max-w-4xl mx-auto mt-24 space-y-12">
-                      <div className="text-center space-y-3">
-                        <h2 className="text-3xl font-semibold text-gray-900 tracking-tight">Practicum Details</h2>
-                        <p className="text-gray-400 text-sm font-medium">Fill the identified student evaluation sections below.</p>
-                      </div>
-                      
-                      <div className="relative">
-                        <DynamicForm />
-                        
+                    {/* Editor View - Integrated Lab Partner Side-By-Side Layout */}
+                    <div className="max-w-7xl mx-auto mt-24">
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start relative">
+                        {/* Manual entry / dynamic field inputs form */}
+                        <div className="lg:col-span-7 xl:col-span-8 bg-white border border-gray-100 rounded-[32px] p-8 shadow-sm">
+                          <div className="space-y-3 mb-8">
+                            <h2 className="text-2xl font-bold text-gray-900 tracking-tight">{config.title} Details</h2>
+                            <p className="text-gray-400 text-xs font-semibold">
+                              Fill the student evaluation fields below manually, or select a field to trigger AI-assisted generation in the copilot panel.
+                            </p>
+                          </div>
+                          <DynamicForm />
+                        </div>
+
+                        {/* Interactive Laboratory Partner Sidebar Chat */}
+                        <div className="lg:col-span-5 xl:col-span-4 lg:sticky lg:top-28">
+                          <AIChatPanel />
+                        </div>
+
                         <AnimatePresence>
                           {showDrafts && (
                             <div className="fixed inset-y-0 right-0 w-[420px] z-[60] p-6 pr-8 bg-[#fafafb]/80 backdrop-blur-sm pointer-events-none">
@@ -380,6 +352,7 @@ export default function App() {
           </AnimatePresence>
         </div>
       </main>
+      <GeneratedDocPreviewModal isOpen={isPreviewOpen} onClose={() => setIsPreviewOpen(false)} />
     </div>
   );
 }
